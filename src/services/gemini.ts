@@ -5,6 +5,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { Message, AppSettings } from "../types";
+import { CapacitorHttp } from '@capacitor/core';
 
 // Helper to sanitize API endpoint
 function sanitizeEndpoint(endpoint: string): string {
@@ -27,7 +28,8 @@ export async function sendMessageToGemini(
   try {
     if (settings.apiEndpoint) {
       const sanitizedEndpoint = sanitizeEndpoint(settings.apiEndpoint);
-      console.log("Attempting to connect to API endpoint:", sanitizedEndpoint);
+      const url = `${sanitizedEndpoint}/chat/completions`;
+      console.log("Attempting to connect to API endpoint:", url);
       
       const history = messages.slice(0, -1).map(msg => ({
         role: msg.role === 'assistant' ? 'assistant' : 'user',
@@ -36,28 +38,34 @@ export async function sendMessageToGemini(
 
       const lastMessage = messages[messages.length - 1];
 
-      const response = await fetch(`${sanitizedEndpoint}/chat/completions`, {
+      // Use CapacitorHttp for better compatibility and to bypass CORS on mobile
+      const options = {
+        url: url,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${settings.apiKey || "lm-studio"}`
         },
-        body: JSON.stringify({
+        data: {
           model: settings.modelName || "local-model",
           messages: [
             ...history,
             { role: 'user', content: lastMessage.content }
           ],
           stream: false,
-        }),
-      });
+        },
+        connectTimeout: 30000,
+        readTimeout: 60000
+      };
 
-      if (!response.ok) {
-        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+      const response = await CapacitorHttp.request(options);
+
+      if (response.status < 200 || response.status >= 300) {
+        console.error("API Response Error:", response);
+        throw new Error(`API 请求失败: ${response.status} ${response.data?.error?.message || ''}`);
       }
 
-      const data = await response.json();
-      const fullText = data.choices[0]?.message?.content || "";
+      const fullText = response.data.choices[0]?.message?.content || "";
       
       if (fullText) {
         onChunk?.(fullText);

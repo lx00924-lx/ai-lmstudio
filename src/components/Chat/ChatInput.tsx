@@ -23,6 +23,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const isLongPress = useRef(false);
   const { isRecording, audioUrl, startRecording, stopRecording, setAudioUrl } = useVoiceRecorder();
 
   // Auto-focus when isRecording becomes false
@@ -69,7 +71,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
       }
     } catch (error) {
       console.error('Camera error:', error);
-      // User might have cancelled
     }
   };
 
@@ -87,6 +88,27 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
       }
     } catch (error) {
       console.error('Gallery error:', error);
+    }
+  };
+
+  const handleCameraStart = () => {
+    isLongPress.current = false;
+    longPressTimer.current = setTimeout(() => {
+      isLongPress.current = true;
+      pickImage();
+    }, 600);
+  };
+
+  const handleCameraEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const handleCameraClick = () => {
+    if (!isLongPress.current) {
+      takePhoto();
     }
   };
 
@@ -177,22 +199,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
               variant="ghost" 
               size="icon" 
               className="shrink-0 w-11 h-11 rounded-full bg-card border select-none active:scale-95 transition-transform"
-              onClick={takePhoto}
+              onPointerDown={handleCameraStart}
+              onPointerUp={handleCameraEnd}
+              onPointerLeave={handleCameraEnd}
+              onClick={handleCameraClick}
               disabled={isRecording}
-              title="拍照"
+              title="点击拍照，长按选择图片"
             >
               <Camera size={20} />
-            </Button>
-            <Button 
-              type="button"
-              variant="ghost" 
-              size="icon" 
-              className="shrink-0 w-11 h-11 rounded-full bg-card border select-none active:scale-95 transition-transform"
-              onClick={pickImage}
-              disabled={isRecording}
-              title="相册"
-            >
-              <ImageIcon size={20} />
             </Button>
           </div>
           
