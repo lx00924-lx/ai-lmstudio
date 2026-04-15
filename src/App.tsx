@@ -230,41 +230,33 @@ export default function App() {
       mediaUrl
     };
 
+    if (!state.settings.apiKey && !process.env.GEMINI_API_KEY) {
+      setState(prev => ({ ...prev, error: "请在设置中配置 API Key 以开始聊天。" }));
+      return;
+    }
+
+    const assistantMessageId = crypto.randomUUID();
+    const currentMessages = [...state.messages, userMessage];
+
     setState(prev => ({
       ...prev,
-      messages: [...prev.messages, userMessage],
+      messages: [
+        ...currentMessages,
+        {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: "",
+          timestamp: new Date(),
+          type: 'text'
+        }
+      ],
       isLoading: true,
       error: null
     }));
 
     try {
       let assistantMessageContent = "";
-      const assistantMessageId = crypto.randomUUID();
-
-      // Initial empty assistant message for streaming
-      setState(prev => ({
-        ...prev,
-        messages: [
-          ...prev.messages,
-          {
-            id: assistantMessageId,
-            role: 'assistant',
-            content: "",
-            timestamp: new Date(),
-            type: 'text'
-          }
-        ]
-      }));
-
-      // Use functional updates to access state inside sendMessageToGemini
-      setState(prev => {
-        if (!prev.settings.apiKey && !process.env.GEMINI_API_KEY) {
-          throw new Error("请在设置中配置 API Key 以开始聊天。");
-        }
-        return prev;
-      });
-
-      await sendMessageToGemini([...state.messages, userMessage], state.settings, (chunk) => {
+      await sendMessageToGemini(currentMessages, state.settings, (chunk) => {
         assistantMessageContent += chunk;
         setState(prev => ({
           ...prev,
@@ -275,7 +267,6 @@ export default function App() {
           )
         }));
       });
-
     } catch (error) {
       setState(prev => ({
         ...prev,
