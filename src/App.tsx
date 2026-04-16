@@ -103,7 +103,7 @@ export default function App() {
     } catch (error) {
       console.error('Failed to parse settings', error);
     }
-
+    
     return {
       messages: [
         {
@@ -163,7 +163,7 @@ export default function App() {
   const deleteMessagesByRange = (days: number | 'all') => {
     setState(prev => {
       const welcomeMessage = prev.messages.find(m => m.id === '1' || m.id === 'welcome');
-
+      
       if (days === 'all') {
         return {
           ...prev,
@@ -218,11 +218,11 @@ export default function App() {
       .filter(m => selectedMessageIds.includes(m.id))
       .map(m => `[${m.role === 'user' ? state.settings.userName : state.settings.aiName}]: ${m.content}`)
       .join('\n\n');
-
+    
     await Clipboard.write({
       string: content
     });
-
+    
     await Toast.show({ text: '已复制到剪贴板' });
     setSelectedMessageIds([]);
     setIsSelectionMode(false);
@@ -232,7 +232,7 @@ export default function App() {
     try {
       const data = JSON.stringify(state.messages, null, 2);
       const fileName = `chat_history_${new Date().getTime()}.json`;
-
+      
       const result = await Filesystem.writeFile({
         path: fileName,
         data: data,
@@ -246,7 +246,7 @@ export default function App() {
         url: result.uri,
         dialogTitle: '分享聊天记录',
       });
-
+      
       await Toast.show({ text: '导出成功' });
     } catch (error) {
       console.error('Export failed', error);
@@ -321,9 +321,9 @@ export default function App() {
         assistantMessageContent += chunk;
         setState(prev => ({
           ...prev,
-          messages: prev.messages.map(msg =>
-            msg.id === assistantMessageId
-              ? { ...msg, content: assistantMessageContent }
+          messages: prev.messages.map(msg => 
+            msg.id === assistantMessageId 
+              ? { ...msg, content: assistantMessageContent } 
               : msg
           )
         }));
@@ -338,7 +338,7 @@ export default function App() {
     }
   }, [state.messages, state.settings]);
 
-  const filteredMessages = state.messages.filter(msg =>
+  const filteredMessages = state.messages.filter(msg => 
     msg.content.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -368,9 +368,9 @@ export default function App() {
             className="fixed inset-y-0 left-0 w-20 border-r bg-sidebar flex flex-col items-center py-8 gap-6 shrink-0 z-50 shadow-2xl"
           >
             <div className="flex flex-col gap-4">
-              <Button
-                variant="ghost"
-                size="icon"
+              <Button 
+                variant="ghost" 
+                size="icon" 
                 className={cn(
                   "w-11 h-11 rounded-xl bg-muted border transition-colors",
                   isSearching ? "text-primary border-primary/50" : "text-muted-foreground"
@@ -382,27 +382,27 @@ export default function App() {
               >
                 <Search size={20} />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
+              <Button 
+                variant="ghost" 
+                size="icon" 
                 className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors"
                 onClick={handleExportChat}
                 title="导出记录"
               >
                 <Download size={20} />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
+              <Button 
+                variant="ghost" 
+                size="icon" 
                 className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground hover:text-primary hover:border-primary/50 transition-colors"
                 onClick={handleImportChat}
                 title="导入记录"
               >
                 <Upload size={20} />
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
+              <Button 
+                variant="ghost" 
+                size="icon" 
                 className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground hover:text-destructive hover:border-destructive/50 transition-colors"
                 onClick={clearChat}
               >
@@ -411,17 +411,17 @@ export default function App() {
             </div>
 
             <div className="mt-auto flex flex-col gap-4">
-              <Button
-                variant="ghost"
-                size="icon"
+              <Button 
+                variant="ghost" 
+                size="icon" 
                 className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground"
                 onClick={toggleTheme}
               >
                 {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
               </Button>
-              <Button
-                variant="ghost"
-                size="icon"
+              <Button 
+                variant="ghost" 
+                size="icon" 
                 className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground"
                 onClick={() => setIsSettingsOpen(true)}
               >
@@ -468,7 +468,7 @@ export default function App() {
                         autoFocus
                       />
                       {searchQuery && (
-                        <button
+                        <button 
                           onClick={() => setSearchQuery('')}
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground pointer-events-auto"
                         >
@@ -519,15 +519,15 @@ export default function App() {
         <div className="flex-1 flex flex-col relative overflow-hidden">
           {/* Custom Background Layer */}
           {theme === 'light' && state.settings.customBackground && (
-            <div
+            <div 
               className="absolute inset-0 z-0 opacity-40 pointer-events-none bg-cover bg-center bg-no-repeat"
               style={{ backgroundImage: `url(${state.settings.customBackground})` }}
             />
           )}
-
-          <MessageList
-            messages={filteredMessages}
-            isLoading={state.isLoading}
+          
+          <MessageList 
+            messages={filteredMessages} 
+            isLoading={state.isLoading} 
             settings={state.settings}
             isSelectionMode={isSelectionMode}
             selectedIds={selectedMessageIds}
@@ -586,11 +586,11 @@ export default function App() {
         </div>
       </main>
 
-      <SettingsDialog
-        open={isSettingsOpen}
-        onOpenChange={setIsSettingsOpen}
-        settings={state.settings}
-        onSave={handleSaveSettings}
+      <SettingsDialog 
+        open={isSettingsOpen} 
+        onOpenChange={setIsSettingsOpen} 
+        settings={state.settings} 
+        onSave={handleSaveSettings} 
       />
 
       <DeleteHistoryDialog
