@@ -30,7 +30,7 @@ export async function sendMessageToGemini(
       const sanitizedEndpoint = sanitizeEndpoint(settings.apiEndpoint);
       const url = `${sanitizedEndpoint}/chat/completions`;
       console.log("Attempting to connect to API endpoint:", url);
-      
+
       const history = messages.slice(0, -1).map(msg => ({
         role: msg.role === 'assistant' ? 'assistant' : 'user',
         content: msg.content
@@ -66,16 +66,16 @@ export async function sendMessageToGemini(
       }
 
       const fullText = response.data.choices[0]?.message?.content || "";
-      
+
       if (fullText) {
         onChunk?.(fullText);
       }
-      
+
       return fullText;
     }
 
     // Use GoogleGenAI client
-    const ai = new GoogleGenAI({ 
+    const ai = new GoogleGenAI({
       apiKey: settings.apiKey || process.env.GEMINI_API_KEY || "",
       baseUrl: settings.apiEndpoint || undefined
     } as any);
@@ -100,7 +100,7 @@ export async function sendMessageToGemini(
     }
 
     const responseStream = await ai.models.generateContentStream({
-      model: settings.modelName || "gemini-1.5-flash",
+      model: settings.modelName || "gemini-3-flash-preview",
       contents: [
         ...history,
         { role: 'user', parts }
