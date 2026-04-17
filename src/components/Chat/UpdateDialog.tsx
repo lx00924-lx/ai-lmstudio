@@ -33,7 +33,9 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
 }) => {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-[450px] bg-white dark:bg-card border-border text-foreground z-[9999]">
+      <DialogContent 
+        className="sm:max-w-[450px] bg-white dark:bg-card border-border text-foreground z-[9999]"
+      >
         <DialogHeader>
           <div className="flex items-center gap-3 mb-2">
             <div className="p-2 rounded-xl bg-primary/10 text-primary">
