@@ -164,22 +164,6 @@ const QuoteDisplay: React.FC<{ quote: Message['quote']; onLocate?: (id: string) 
   );
 };
 
-interface MessageListProps {
-  messages: Message[];
-  isLoading: boolean;
-  settings: AppSettings;
-  isSelectionMode: boolean;
-  isSearching: boolean;
-  searchQuery?: string;
-  activeSearchMatchId?: string;
-  selectedIds: string[];
-  onToggleSelection: (id: string) => void;
-  onEnterSelectionMode: (id: string) => void;
-  onQuote?: (message: Message) => void;
-  onTranscribe?: (message: Message) => void;
-  onDelete?: (id: string) => void;
-}
-
 const HighlightedText: React.FC<{ text: string; query: string; isActive?: boolean }> = ({ text, query, isActive }) => {
   if (!query.trim()) return <>{text}</>;
   
@@ -206,6 +190,170 @@ const HighlightedText: React.FC<{ text: string; query: string; isActive?: boolea
   );
 };
 
+interface MessageListProps {
+  messages: Message[];
+  isLoading: boolean;
+  settings: AppSettings;
+  isSelectionMode: boolean;
+  isSearching: boolean;
+  searchQuery?: string;
+  activeSearchMatchId?: string;
+  selectedIds: string[];
+  onToggleSelection: (id: string) => void;
+  onEnterSelectionMode: (id: string) => void;
+  onQuote?: (message: Message) => void;
+  onTranscribe?: (message: Message) => void;
+  onDelete?: (id: string) => void;
+}
+
+const MessageItem: React.FC<{
+  message: Message;
+  isSelected: boolean;
+  isSelectionMode: boolean;
+  isSearching: boolean;
+  searchQuery: string;
+  activeSearchMatchId?: string;
+  highlightMessageId: string | null;
+  contextMenuId?: string;
+  settings: AppSettings;
+  onMouseDown: (e: React.MouseEvent, id: string) => void;
+  onMouseUp: () => void;
+  onMouseEnter: (id: string) => void;
+  onTouchStart: (e: React.TouchEvent, id: string) => void;
+  onTouchEnd: () => void;
+  onClick: (id: string) => void;
+  scrollToMessage: (id: string) => void;
+  messageRef?: (el: HTMLDivElement | null) => void;
+  onRegisterReplay?: (id: string, play: () => void) => void;
+}> = ({
+  message,
+  isSelected,
+  isSelectionMode,
+  isSearching,
+  searchQuery,
+  activeSearchMatchId,
+  highlightMessageId,
+  contextMenuId,
+  settings,
+  onMouseDown,
+  onMouseUp,
+  onMouseEnter,
+  onTouchStart,
+  onTouchEnd,
+  onClick,
+  scrollToMessage,
+  messageRef,
+  onRegisterReplay
+}) => {
+  return (
+    <motion.div
+      key={message.id}
+      ref={messageRef}
+      data-message-id={message.id}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      onMouseDown={(e) => onMouseDown(e, message.id)}
+      onMouseUp={onMouseUp}
+      onMouseEnter={() => onMouseEnter(message.id)}
+      onTouchStart={(e) => onTouchStart(e, message.id)}
+      onTouchEnd={onTouchEnd}
+      onClick={() => onClick(message.id)}
+      className={cn(
+        "flex w-full gap-3 transition-all duration-300 rounded-xl p-1 relative",
+        message.role === 'user' ? "flex-row-reverse" : "flex-row",
+        isSelectionMode && "cursor-pointer active:scale-[0.98]",
+        isSelected && "opacity-100 scale-[1.02]",
+        highlightMessageId === message.id && "animate-pulse-highlight",
+        contextMenuId === message.id && "z-[65]"
+      )}
+    >
+      {isSelectionMode && (
+        <div className="flex items-center justify-center px-2">
+          {isSelected ? (
+            <CheckCircle2 className="text-primary size-5 fill-primary/10" />
+          ) : (
+            <Circle className="text-muted-foreground/30 size-5" />
+          )}
+        </div>
+      )}
+
+      {message.role === 'assistant' && (
+        <Avatar className="w-8 h-8 border border-border shrink-0 mt-1">
+          <AvatarFallback><Bot size={16} /></AvatarFallback>
+        </Avatar>
+      )}
+
+      <div className={cn(
+        "flex flex-col max-w-[85%] transition-opacity",
+        message.role === 'user' ? "items-end" : "items-start",
+        isSelectionMode && !isSelected && "opacity-50"
+      )}>
+        <div className="flex items-center gap-2 mb-1 px-1">
+          <span className="text-[10px] font-medium text-muted-foreground tracking-wider">
+            {message.role === 'assistant' ? settings.aiName : settings.userName}
+          </span>
+        </div>
+        <div className={cn(
+          "px-5 py-4 rounded-[20px] text-[15px] leading-relaxed transition-all relative overflow-hidden",
+          message.role === 'user' 
+            ? "bg-white dark:bg-card border border-border rounded-br-[4px] text-black dark:text-foreground" 
+            : "bg-white dark:bg-card border border-border rounded-bl-[4px] text-black dark:text-foreground",
+          isSelected && "ring-2 ring-primary/50 border-primary/50 shadow-lg shadow-primary/10",
+          contextMenuId === message.id && "ring-2 ring-primary/30 scale-[0.99]"
+        )}>
+          <QuoteDisplay quote={message.quote} onLocate={scrollToMessage} />
+
+          {message.type === 'image' && message.mediaUrl && (
+            <img 
+              src={message.mediaUrl} 
+              alt="Uploaded" 
+              className="rounded-lg mb-2 max-w-full h-auto"
+              referrerPolicy="no-referrer"
+            />
+          )}
+          
+          {message.type === 'voice' && message.mediaUrl && (
+            <>
+              <VoiceMessagePlayer 
+                url={message.mediaUrl} 
+                onReplay={(play) => onRegisterReplay?.(message.id, play)}
+              />
+              {message.transcribedText && (
+                <div className="mt-3 pt-3 border-t border-border/30 text-xs italic text-muted-foreground/80 leading-relaxed font-mono">
+                   <Languages size={10} className="inline mr-1 opacity-50" />
+                   {message.transcribedText}
+                </div>
+              )}
+            </>
+          )}
+
+          {message.content && (
+            <div className={cn(
+              "prose prose-sm dark:prose-invert max-w-none",
+              (message.type === 'image' || message.type === 'voice') && "mt-2 pt-2 border-t border-border/50"
+            )}>
+              {isSearching ? (
+                <div className="whitespace-pre-wrap">
+                  <HighlightedText 
+                    text={message.content} 
+                    query={searchQuery} 
+                    isActive={message.id === activeSearchMatchId}
+                  />
+                </div>
+              ) : (
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              )}
+            </div>
+          )}
+        </div>
+        <span className="text-[10px] text-muted-foreground mt-1 px-1">
+          {formatMessageDate(message.timestamp)}
+        </span>
+      </div>
+    </motion.div>
+  );
+};
+
 export const MessageList: React.FC<MessageListProps> = ({ 
   messages, 
   isLoading, 
@@ -229,6 +377,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const messageRefs = React.useRef<{ [key: string]: HTMLDivElement | null }>({});
   const replayRefs = React.useRef<{ [key: string]: () => void }>({});
   const lastSelectedId = React.useRef<string | null>(null);
+  const touchStartPos = React.useRef<{ x: number; y: number } | null>(null);
 
   const scrollToMessage = (id: string) => {
     const element = messageRefs.current[id];
@@ -279,6 +428,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     
     const x = e.clientX;
     const y = e.clientY;
+    touchStartPos.current = { x, y };
 
     longPressTimer.current = setTimeout(() => {
       if (isSearching) {
@@ -288,6 +438,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       } else {
         setContextMenu({ id, x, y });
       }
+      touchStartPos.current = null;
     }, 600);
   };
 
@@ -297,6 +448,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     const touch = e.touches[0];
     const x = touch.clientX;
     const y = touch.clientY;
+    touchStartPos.current = { x, y };
 
     longPressTimer.current = setTimeout(() => {
       if (isSearching) {
@@ -306,13 +458,16 @@ export const MessageList: React.FC<MessageListProps> = ({
       } else {
         setContextMenu({ id, x, y });
       }
+      touchStartPos.current = null;
     }, 600);
   };
 
   const handleTouchEnd = () => {
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
     }
+    touchStartPos.current = null;
     setIsDragging(false);
     lastSelectedId.current = null;
   };
@@ -331,6 +486,17 @@ export const MessageList: React.FC<MessageListProps> = ({
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    if (longPressTimer.current && touchStartPos.current) {
+      const touch = e.touches[0];
+      const dx = Math.abs(touch.clientX - touchStartPos.current.x);
+      const dy = Math.abs(touch.clientY - touchStartPos.current.y);
+      if (dx > 10 || dy > 10) {
+        clearTimeout(longPressTimer.current);
+        longPressTimer.current = null;
+        touchStartPos.current = null;
+      }
+    }
+
     if (!isDragging || !isSelectionMode) return;
     
     const touch = e.touches[0];
@@ -412,115 +578,34 @@ export const MessageList: React.FC<MessageListProps> = ({
   return (
     <div 
       ref={scrollRef} 
-      className="flex-1 overflow-y-auto p-4 space-y-6 pb-24 select-none"
-      onTouchMove={handleTouchMove}
-    >
-      {messages.map((message) => {
-        const isSelected = selectedIds.includes(message.id);
-        
-        return (
-          <motion.div
+        className="flex-1 overflow-y-auto p-4 space-y-6 pb-24 select-none"
+        onTouchMove={handleTouchMove}
+      >
+        {messages.map((message) => (
+          <MessageItem
             key={message.id}
-            ref={(el) => { messageRefs.current[message.id] = el; }}
-            data-message-id={message.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            onMouseDown={(e) => handleMouseDown(e, message.id)}
+            message={message}
+            isSelected={selectedIds.includes(message.id)}
+            isSelectionMode={isSelectionMode}
+            isSearching={isSearching}
+            searchQuery={searchQuery}
+            activeSearchMatchId={activeSearchMatchId}
+            highlightMessageId={highlightMessageId}
+            contextMenuId={contextMenu?.id}
+            settings={settings}
+            onMouseDown={handleMouseDown}
             onMouseUp={handleTouchEnd}
-            onMouseEnter={() => handleMouseEnter(message.id)}
-            onTouchStart={(e) => handleTouchStart(e, message.id)}
+            onMouseEnter={handleMouseEnter}
+            onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
-            onClick={() => handleClick(message.id)}
-            className={cn(
-              "flex w-full gap-3 transition-all duration-300 rounded-xl p-1",
-              message.role === 'user' ? "flex-row-reverse" : "flex-row",
-              isSelectionMode && "cursor-pointer active:scale-[0.98]",
-              isSelected && "opacity-100 scale-[1.02]",
-              highlightMessageId === message.id && "animate-pulse-highlight"
-            )}
-          >
-            {isSelectionMode && (
-              <div className="flex items-center justify-center px-2">
-                {isSelected ? (
-                  <CheckCircle2 className="text-primary size-5 fill-primary/10" />
-                ) : (
-                  <Circle className="text-muted-foreground/30 size-5" />
-                )}
-              </div>
-            )}
-
-            <div className={cn(
-              "flex flex-col max-w-[85%] transition-opacity",
-              message.role === 'user' ? "items-end" : "items-start",
-              isSelectionMode && !isSelected && "opacity-50"
-            )}>
-              <div className="flex items-center gap-2 mb-1 px-1">
-                <span className="text-[10px] font-medium text-muted-foreground tracking-wider">
-                  {message.role === 'assistant' ? settings.aiName : settings.userName}
-                </span>
-              </div>
-              <div className={cn(
-                "px-5 py-4 rounded-[20px] text-[15px] leading-relaxed transition-all relative overflow-hidden",
-                message.role === 'user' 
-                  ? "bg-white dark:bg-card border border-border rounded-br-[4px] text-black dark:text-foreground" 
-                  : "bg-white dark:bg-card border border-border rounded-bl-[4px] text-black dark:text-foreground",
-                isSelected && "ring-2 ring-primary/50 border-primary/50 shadow-lg shadow-primary/10",
-                contextMenu?.id === message.id && "ring-2 ring-primary/30 scale-[0.99]"
-              )}>
-                <QuoteDisplay quote={message.quote} onLocate={scrollToMessage} />
-
-                {message.type === 'image' && message.mediaUrl && (
-                  <img 
-                    src={message.mediaUrl} 
-                    alt="Uploaded" 
-                    className="rounded-lg mb-2 max-w-full h-auto"
-                    referrerPolicy="no-referrer"
-                  />
-                )}
-                
-                {message.type === 'voice' && message.mediaUrl && (
-                  <>
-                    <VoiceMessagePlayer 
-                      url={message.mediaUrl} 
-                      onReplay={(play) => replayRefs.current[message.id] = play}
-                    />
-                    {message.transcribedText && (
-                      <div className="mt-3 pt-3 border-t border-border/30 text-xs italic text-muted-foreground/80 leading-relaxed font-mono">
-                         <Languages size={10} className="inline mr-1 opacity-50" />
-                         {message.transcribedText}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {message.content && (
-                  <div className={cn(
-                    "prose prose-sm dark:prose-invert max-w-none",
-                    (message.type === 'image' || message.type === 'voice') && "mt-2 pt-2 border-t border-border/50"
-                  )}>
-                    {isSearching ? (
-                      <div className="whitespace-pre-wrap">
-                        <HighlightedText 
-                          text={message.content} 
-                          query={searchQuery} 
-                          isActive={message.id === activeSearchMatchId}
-                        />
-                      </div>
-                    ) : (
-                      <ReactMarkdown>{message.content}</ReactMarkdown>
-                    )}
-                  </div>
-                )}
-              </div>
-              <span className="text-[10px] text-muted-foreground mt-1 px-1">
-                {formatMessageDate(message.timestamp)}
-              </span>
-            </div>
-          </motion.div>
-        );
-      })}
-      
-      {isLoading && (
+            onClick={handleClick}
+            scrollToMessage={scrollToMessage}
+            messageRef={(el) => { messageRefs.current[message.id] = el; }}
+            onRegisterReplay={(id, play) => { replayRefs.current[id] = play; }}
+          />
+        ))}
+        
+        {isLoading && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

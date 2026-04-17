@@ -22,7 +22,7 @@ import { Input } from './components/ui/input';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
-import { Share } from '@capacitor/share';
+import { FileOpener } from '@capacitor-community/file-opener';
 import { Clipboard } from '@capacitor/clipboard';
 import { Toast } from '@capacitor/toast';
 
@@ -44,7 +44,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDeleteHistoryOpen, setIsDeleteHistoryOpen] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; url: string } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; url: string; apkUrl?: string } | null>(null);
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -277,45 +277,21 @@ export default function App() {
       const data = JSON.stringify(state.messages, null, 2);
       const fileName = `chat_history_${new Date().toISOString().split('T')[0]}.json`;
       
-      // Check if we are in a web environment (standard browser)
-      // Capactior Share often fails in web if browser doesn't support Web Share API or if it's not HTTPS
-      const isWeb = !window.hasOwnProperty('Capacitor') || (window as any).Capacitor?.getPlatform() === 'web';
+      const blob = new Blob([data], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
       
-      if (isWeb) {
-        const blob = new Blob([data], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        await Toast.show({ text: '已开始下载' });
-        setIsSidebarOpen(false);
-        return;
-      }
-
-      // Capacitor logic for native mobile
-      const result = await Filesystem.writeFile({
-        path: fileName,
-        data: data,
-        directory: Directory.Cache,
-        encoding: Encoding.UTF8,
-      });
-
-      await Share.share({
-        title: '导出聊天记录',
-        text: '这是我的聊天记录备份',
-        url: result.uri,
-        dialogTitle: '分享聊天记录',
-      });
-      
-      await Toast.show({ text: '导出成功' });
+      await Toast.show({ text: '已保存至下载目录' });
       setIsSidebarOpen(false);
     } catch (error) {
       console.error('Export failed', error);
-      await Toast.show({ text: '导出失败' });
+      await Toast.show({ text: '保存失败' });
     }
   };
 
@@ -330,14 +306,21 @@ export default function App() {
         reader.onload = async (event) => {
           try {
             const content = event.target?.result as string;
-            const messages = JSON.parse(content);
-            if (Array.isArray(messages)) {
-              setState(prev => ({ ...prev, messages }));
-              await Toast.show({ text: '导入成功' });
+            const importedData = JSON.parse(content);
+            
+            if (Array.isArray(importedData)) {
+              const formattedMessages = importedData.map((m: any) => ({
+                ...m,
+                timestamp: new Date(m.timestamp)
+              }));
+
+              setState(prev => ({ ...prev, messages: formattedMessages }));
+              await Toast.show({ text: '聊天记录已覆盖恢复' });
+              setIsSidebarOpen(false);
             }
           } catch (error) {
             console.error('Import failed', error);
-            await Toast.show({ text: '导入失败：文件格式不正确' });
+            await Toast.show({ text: '导入失败：文件格式不合法' });
           }
         };
         reader.readAsText(file);
@@ -474,11 +457,16 @@ export default function App() {
       const latestVersion = data.tag_name;
       const currentVersion = localStorage.getItem('app_version') || 'v0.0.0'; 
 
+      // Find APK in assets
+      const apkAsset = data.assets?.find((asset: any) => asset.name.endsWith('.apk'));
+      const apkUrl = apkAsset?.browser_download_url;
+
       if (latestVersion !== currentVersion) {
         setUpdateInfo({
           version: latestVersion,
           body: data.body,
-          url: data.html_url
+          url: data.html_url,
+          apkUrl: apkUrl
         });
         return { success: true };
       } else {
@@ -487,6 +475,41 @@ export default function App() {
     } catch (error) {
       console.error('Update check failed', error);
       return { success: false, error: error instanceof Error ? error.message : '检测更新失败，请稍后重试' };
+    }
+  };
+
+  const handleDownloadAndInstall = async (url: string, fileName: string) => {
+    try {
+      await Toast.show({ text: '开始下载更新包...', duration: 'long' });
+      
+      const isWeb = !window.hasOwnProperty('Capacitor') || (window as any).Capacitor?.getPlatform() === 'web';
+      
+      if (isWeb) {
+        window.open(url, '_blank');
+        return;
+      }
+
+      // Capacitor logic for mobile
+      // 1. Download the file
+      const downloadResult = await Filesystem.downloadFile({
+        url: url,
+        path: fileName,
+        directory: Directory.Cache,
+      });
+
+      if (downloadResult.path) {
+        await Toast.show({ text: '下载完成，正在打开安装程序...' });
+        
+        // 2. Open the file
+        await FileOpener.open({
+          filePath: downloadResult.path,
+          contentType: 'application/vnd.android.package-archive'
+        });
+      }
+    } catch (error) {
+      console.error('Update failed', error);
+      await Toast.show({ text: '更新失败，请前往浏览器手动下载' });
+      window.open(url, '_blank');
     }
   };
 
@@ -694,7 +717,7 @@ export default function App() {
                             variant="ghost"
                             size="icon"
                             className={cn(
-                              "rounded-full w-8 h-8 bg-muted border border-muted-foreground/20 text-muted-foreground shrink-0 transition-all",
+                              "relative overflow-hidden rounded-full w-8 h-8 bg-muted border border-muted-foreground/20 text-muted-foreground shrink-0 transition-all",
                               selectedDate && "text-primary border-primary/40 bg-primary/5"
                             )}
                           >
@@ -703,7 +726,8 @@ export default function App() {
                               type="date"
                               value={selectedDate}
                               onChange={(e) => setSelectedDate(e.target.value)}
-                              className="absolute inset-0 opacity-0 cursor-pointer"
+                              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                              style={{ colorScheme: theme }}
                             />
                           </Button>
                           {selectedDate && (
@@ -883,12 +907,19 @@ export default function App() {
       />
 
       {updateInfo && (
-        <UpdateDialog
+        <UpdateDialog 
           isOpen={!!updateInfo}
           onClose={() => setUpdateInfo(null)}
           version={updateInfo.version}
           changelog={updateInfo.body}
-          downloadUrl={updateInfo.url}
+          downloadUrl={updateInfo.apkUrl || updateInfo.url}
+          onUpdate={() => {
+            if (updateInfo.apkUrl) {
+              handleDownloadAndInstall(updateInfo.apkUrl, `update_${updateInfo.version}.apk`);
+            } else {
+              window.open(updateInfo.url, '_blank');
+            }
+          }}
         />
       )}
     </div>

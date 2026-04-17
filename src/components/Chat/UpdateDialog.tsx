@@ -22,6 +22,7 @@ interface UpdateDialogProps {
   version: string;
   changelog: string;
   downloadUrl: string;
+  onUpdate?: () => void;
 }
 
 export const UpdateDialog: React.FC<UpdateDialogProps> = ({
@@ -30,6 +31,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
   version,
   changelog,
   downloadUrl,
+  onUpdate,
 }) => {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -62,14 +64,16 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
           <Button 
             className="flex-1 rounded-xl h-11 bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:opacity-90"
             onClick={() => {
-              // Store current version in storage to suppress next check if needed
-              localStorage.setItem('app_version', version);
-              // Force reload from server to get new assets
-              window.location.reload();
+              if (onUpdate) {
+                onUpdate();
+              } else {
+                localStorage.setItem('app_version', version);
+                window.location.reload();
+              }
             }}
           >
             <Rocket size={16} className="mr-2" />
-            立即重启更新
+            立即更新
           </Button>
         </DialogFooter>
       </DialogContent>
