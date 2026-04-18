@@ -131,3 +131,15 @@
     @apply font-sans;
     }
 }
+
+@keyframes pulse-highlight {
+  0% { transform: scale(1); background-color: transparent; }
+  10% { transform: scale(1.02); background-color: rgba(0, 210, 255, 0.1); }
+  50% { transform: scale(1.02); background-color: rgba(0, 210, 255, 0.2); box-shadow: 0 0 20px rgba(0, 210, 255, 0.4); }
+  90% { transform: scale(1.02); background-color: rgba(0, 210, 255, 0.1); }
+  100% { transform: scale(1); background-color: transparent; }
+}
+
+.animate-pulse-highlight {
+  animation: pulse-highlight 2s ease-in-out;
+}

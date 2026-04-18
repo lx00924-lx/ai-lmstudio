@@ -31,12 +31,22 @@ export async function sendMessageToGemini(
       const url = `${sanitizedEndpoint}/chat/completions`;
       console.log("Attempting to connect to API endpoint:", url);
       
+      const systemMessage = settings.systemInstruction 
+        ? [{ role: 'system', content: settings.systemInstruction }] 
+        : [{ role: 'system', content: `你是 ${settings.aiName}，一个乐于助人的 AI 助手。请用中文回答。保持回答简洁并适合移动端阅读。使用 markdown 格式。` }];
+
       const history = messages.slice(0, -1).map(msg => ({
         role: msg.role === 'assistant' ? 'assistant' : 'user',
         content: msg.content
       }));
 
       const lastMessage = messages[messages.length - 1];
+      let userPrompt = lastMessage.content;
+
+      // Inject quote context for custom endpoint if exists
+      if (lastMessage.quote) {
+        userPrompt = `引用消息 [${lastMessage.quote.userName}]: "${lastMessage.quote.content}"\n\n回复上面的消息: ${userPrompt}`;
+      }
 
       // Use CapacitorHttp for better compatibility and to bypass CORS on mobile
       const options = {
@@ -49,8 +59,9 @@ export async function sendMessageToGemini(
         data: {
           model: settings.modelName || "local-model",
           messages: [
+            ...systemMessage,
             ...history,
-            { role: 'user', content: lastMessage.content }
+            { role: 'user', content: userPrompt }
           ],
           stream: false,
         },
@@ -76,9 +87,11 @@ export async function sendMessageToGemini(
 
     // Use GoogleGenAI client
     const ai = new GoogleGenAI({ 
-      apiKey: settings.apiKey || process.env.GEMINI_API_KEY || "",
-      baseUrl: settings.apiEndpoint || undefined
-    } as any);
+      apiKey: settings.apiKey || process.env.GEMINI_API_KEY || ""
+    });
+
+    const modelName = settings.modelName || "gemini-3-flash-preview";
+    const systemInstruction = settings.systemInstruction || `你是 ${settings.aiName}，一个乐于助人的 AI 助手。请用中文回答。保持回答简洁并适合移动端阅读。使用 markdown 格式。`;
 
     const history = messages.slice(0, -1).map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
@@ -86,7 +99,14 @@ export async function sendMessageToGemini(
     }));
 
     const lastMessage = messages[messages.length - 1];
-    const parts: any[] = [{ text: lastMessage.content }];
+    let userPrompt = lastMessage.content;
+    
+    // Inject quote context if exists
+    if (lastMessage.quote) {
+      userPrompt = `引用消息 [${lastMessage.quote.userName}]: "${lastMessage.quote.content}"\n\n回复上面的消息: ${userPrompt}`;
+    }
+
+    const parts: any[] = [{ text: userPrompt }];
 
     if ((lastMessage.type === 'image' || lastMessage.type === 'voice') && lastMessage.mediaUrl) {
       const base64Data = lastMessage.mediaUrl.split(',')[1];
@@ -100,14 +120,14 @@ export async function sendMessageToGemini(
     }
 
     const responseStream = await ai.models.generateContentStream({
-      model: settings.modelName || "gemini-3-flash-preview",
+      model: modelName,
       contents: [
         ...history,
         { role: 'user', parts }
       ],
       config: {
-        systemInstruction: settings.systemInstruction || `你是 ${settings.aiName}，一个乐于助人的 AI 助手。请用中文回答。保持回答简洁并适合移动端阅读。使用 markdown 格式。`,
-        tools: [{ googleSearch: {} }],
+        systemInstruction: systemInstruction,
+        tools: [{ googleSearch: {} }] as any,
       }
     });
 

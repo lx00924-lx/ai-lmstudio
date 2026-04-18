@@ -12,6 +12,13 @@ export interface Message {
   timestamp: Date;
   type: 'text' | 'voice' | 'image';
   mediaUrl?: string;
+  transcribedText?: string;
+  quote?: {
+    id: string;
+    userName: string;
+    content: string;
+    timestamp: Date;
+  };
 }
 
 export interface AppSettings {

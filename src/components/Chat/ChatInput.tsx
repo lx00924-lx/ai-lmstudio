@@ -6,19 +6,21 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Mic, Camera, X, Square, Image as ImageIcon } from 'lucide-react';
+import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote } from 'lucide-react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../../lib/utils';
+import { cn, formatMessageDate } from '../../lib/utils';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Toast } from '@capacitor/toast';
 
 interface ChatInputProps {
   onSendMessage: (text: string, type: 'text' | 'voice' | 'image', mediaUrl?: string) => void;
   disabled?: boolean;
+  quotedMessage?: any;
+  onCancelQuote?: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessage, onCancelQuote }) => {
   const [text, setText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -212,6 +214,38 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage }) => {
               >
                 <X size={16} />
               </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {quotedMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              className="px-4 py-3 bg-muted/50 border border-border/50 rounded-2xl flex items-center justify-between gap-3 shadow-sm"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between mb-0.5">
+                  <div className="flex items-center gap-2">
+                    <Quote size={12} className="text-primary" />
+                    <span className="text-[10px] font-bold text-primary uppercase tracking-wider">{quotedMessage.role === 'assistant' ? 'AI' : '我'}</span>
+                  </div>
+                  <span className="text-[9px] text-muted-foreground/60">{formatMessageDate(quotedMessage.timestamp)}</span>
+                </div>
+                <p className="text-xs text-muted-foreground line-clamp-1 italic">
+                  {quotedMessage.content || (quotedMessage.type === 'voice' ? '[语音消息]' : '[图片消息]')}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="w-8 h-8 rounded-full hover:bg-muted"
+                onClick={onCancelQuote}
+              >
+                <X size={14} />
+              </Button>
             </motion.div>
           )}
         </AnimatePresence>

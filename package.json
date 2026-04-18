@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.4.0",
+    "@capacitor-community/file-opener": "^8.0.0",
     "@capacitor/camera": "^8.1.0",
     "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "^8.3.0",
@@ -41,6 +42,7 @@
     "vite": "^6.2.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.3.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
