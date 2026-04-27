@@ -35,7 +35,6 @@ export interface AppSettings {
   systemInstruction?: string;
   githubOwner?: string;
   githubRepo?: string;
-  sendWelcomeOnStart?: boolean;
 }
 
 export interface ChatState {

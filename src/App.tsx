@@ -23,11 +23,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { FileOpener } from '@capacitor-community/file-opener';
-import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { Clipboard } from '@capacitor/clipboard';
 import { Toast } from '@capacitor/toast';
 
-const APP_VERSION = 'v0.0.2';
 const DEFAULT_SETTINGS: AppSettings = {
   userName: '用户',
   userAvatar: '',
@@ -40,7 +38,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   githubOwner: 'LX00924-LX',
   githubRepo: 'ai-lmstudio',
   welcomeMessage: '你好！我是 Aether-X。欢迎回来！有什么我可以帮你的吗？',
-  sendWelcomeOnStart: true,
 };
 
 export default function App() {
@@ -61,14 +58,6 @@ export default function App() {
     const savedTheme = localStorage.getItem('app_theme');
     return (savedTheme as 'light' | 'dark') || 'dark';
   });
-
-  // Version persist logic
-  useEffect(() => {
-    const savedVersion = localStorage.getItem('app_version');
-    if (!savedVersion || savedVersion === 'v0.0.0') {
-      localStorage.setItem('app_version', APP_VERSION);
-    }
-  }, []);
 
   // Wake Lock implementation
   useEffect(() => {
@@ -135,8 +124,8 @@ export default function App() {
       console.error('Failed to parse saved data', error);
     }
     
-    // Add a fresh welcome message for the new session ONLY if history is empty and setting is enabled
-    if (messages.length === 0 && settings.sendWelcomeOnStart && settings.welcomeMessage && settings.welcomeMessage.trim() !== '') {
+    // Add a fresh welcome message for the new session ONLY if history is empty
+    if (messages.length === 0 && settings.welcomeMessage && settings.welcomeMessage.trim() !== '') {
       const sessionWelcome: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -213,10 +202,9 @@ export default function App() {
       const firstMessage = prev.messages[0];
       
       if (days === 'all') {
-        const keepWelcome = prev.settings.sendWelcomeOnStart && firstMessage?.role === 'assistant';
         return {
           ...prev,
-          messages: keepWelcome ? [firstMessage] : []
+          messages: firstMessage?.role === 'assistant' ? [firstMessage] : []
         };
       }
 
@@ -290,7 +278,6 @@ export default function App() {
       const fileName = `chat_history_${new Date().toISOString().split('T')[0]}.json`;
       
       const isWeb = !window.hasOwnProperty('Capacitor') || (window as any).Capacitor?.getPlatform() === 'web';
-      let targetDir = '下载目录';
       
       if (isWeb) {
         const blob = new Blob([data], { type: 'application/json' });
@@ -303,28 +290,16 @@ export default function App() {
         document.body.removeChild(link);
         setTimeout(() => URL.revokeObjectURL(url), 100);
       } else {
-        // Save to Download directory on mobile for better accessibility
-        try {
-          await Filesystem.writeFile({
-            path: `Download/${fileName}`,
-            data: data,
-            directory: Directory.ExternalStorage,
-            encoding: Encoding.UTF8,
-            recursive: true
-          });
-        } catch (e) {
-          // Fallback to Documents if Download folder write fails (e.g. permission issues on some versions)
-          await Filesystem.writeFile({
-            path: fileName,
-            data: data,
-            directory: Directory.Documents,
-            encoding: Encoding.UTF8,
-          });
-          targetDir = '文档目录';
-        }
+        // Save to Documents directory on mobile for better accessibility
+        await Filesystem.writeFile({
+          path: fileName,
+          data: data,
+          directory: Directory.Documents,
+          encoding: Encoding.UTF8,
+        });
       }
       
-      await Toast.show({ text: `已保存至${targetDir}` });
+      await Toast.show({ text: '已保存至下载目录' });
       setIsSidebarOpen(false);
     } catch (error) {
       console.error('Export failed', error);
@@ -332,77 +307,38 @@ export default function App() {
     }
   };
 
-  const processImportedData = async (content: string) => {
-    try {
-      const importedData = JSON.parse(content);
-      
-      if (Array.isArray(importedData)) {
-        const formattedMessages = importedData.map((m: any) => ({
-          ...m,
-          timestamp: new Date(m.timestamp)
-        }));
-
-        setState(prev => ({ ...prev, messages: formattedMessages }));
-        await Toast.show({ text: '聊天记录已覆盖恢复' });
-        setIsSidebarOpen(false);
-      } else {
-        await Toast.show({ text: '导入失败：数据格式不正确' });
-      }
-    } catch (error) {
-      console.error('Import failed', error);
-      await Toast.show({ text: '导入失败：文件内容有误' });
-    }
-  };
-
   const handleImportChat = async () => {
-    const isWeb = !window.hasOwnProperty('Capacitor') || (window as any).Capacitor?.getPlatform() === 'web';
-    
-    if (isWeb) {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.json';
-      input.onchange = async (e: any) => {
-        const file = e.target.files[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = async (event) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e: any) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
             const content = event.target?.result as string;
-            await processImportedData(content);
-          };
-          reader.readAsText(file);
-        }
-      };
-      input.click();
-    } else {
-      try {
-        const result = await FilePicker.pickFiles({
-          types: ['application/json'],
-          readData: true,
-        });
-        
-        if (result.files && result.files.length > 0) {
-          const file = result.files[0];
-          if (file.data) {
-            let content = file.data;
-            // Native picker might return base64
-            try {
-              if (!content.includes('"') && !content.includes('{')) {
-                // Heuristic for base64
-                content = atob(content);
-              }
-            } catch (e) {
-              // Not base64
+            const importedData = JSON.parse(content);
+            
+            if (Array.isArray(importedData)) {
+              const formattedMessages = importedData.map((m: any) => ({
+                ...m,
+                timestamp: new Date(m.timestamp)
+              }));
+
+              setState(prev => ({ ...prev, messages: formattedMessages }));
+              await Toast.show({ text: '聊天记录已覆盖恢复' });
+              setIsSidebarOpen(false);
             }
-            await processImportedData(content);
+          } catch (error) {
+            console.error('Import failed', error);
+            await Toast.show({ text: '导入失败：文件格式不合法' });
           }
-        }
-      } catch (error: any) {
-        if (!error?.message?.includes('cancel') && !error?.message?.includes('user')) {
-          console.error('File pick error:', error);
-          await Toast.show({ text: '文件选择失败' });
-        }
+        };
+        reader.readAsText(file);
       }
-    }
+    };
+    input.click();
   };
 
   const handleQuote = (message: Message) => {
@@ -531,7 +467,7 @@ export default function App() {
       
       const data = await response.json();
       const latestVersion = data.tag_name;
-      const currentVersion = localStorage.getItem('app_version') || APP_VERSION; 
+      const currentVersion = localStorage.getItem('app_version') || 'v0.0.2'; 
 
       // Find APK in assets
       const apkAsset = data.assets?.find((asset: any) => asset.name.endsWith('.apk'));
@@ -565,22 +501,13 @@ export default function App() {
         return;
       }
 
-      // 1. Download the file to ExternalStorage/Download
-      let downloadResult;
-      try {
-        downloadResult = await Filesystem.downloadFile({
-          url: url,
-          path: `Download/${fileName}`,
-          directory: Directory.ExternalStorage,
-        });
-      } catch (e) {
-        // Fallback to Documents
-        downloadResult = await Filesystem.downloadFile({
-          url: url,
-          path: fileName,
-          directory: Directory.Documents,
-        });
-      }
+      // Capacitor logic for mobile
+      // 1. Download the file
+      const downloadResult = await Filesystem.downloadFile({
+        url: url,
+        path: fileName,
+        directory: Directory.Documents,
+      });
 
       if (downloadResult.path) {
         await Toast.show({ text: '下载完成，正在打开安装程序...' });
@@ -981,7 +908,6 @@ export default function App() {
         settings={state.settings} 
         onSave={handleSaveSettings} 
         onCheckUpdate={handleCheckUpdate}
-        version={APP_VERSION}
       />
 
       <DeleteHistoryDialog
@@ -1000,13 +926,11 @@ export default function App() {
           changelog={updateInfo.body}
           downloadUrl={updateInfo.apkUrl || updateInfo.url}
           onUpdate={() => {
-            localStorage.setItem('app_version', updateInfo.version);
             if (updateInfo.apkUrl) {
               handleDownloadAndInstall(updateInfo.apkUrl, `update_${updateInfo.version}.apk`);
             } else {
               window.open(updateInfo.url, '_blank');
             }
-            setUpdateInfo(null);
           }}
         />
       )}
