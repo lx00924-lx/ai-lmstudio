@@ -63,7 +63,8 @@ export async function sendMessageToGemini(
 
       const history = messages.slice(0, -1).map(msg => ({
         role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content: mapMessageToCustomContent(msg)
+        content: mapMessageToCustomContent(msg),
+        message_content: msg.content // Optionally adding a text-only companion if content is an array
       }));
 
       const lastMessage = messages[messages.length - 1];
@@ -82,7 +83,12 @@ export async function sendMessageToGemini(
           messages: [
             ...systemMessage,
             ...history,
-            { role: 'user', content: userContent }
+            { 
+              role: 'user', 
+              content: userContent,
+              // Some proxies expect a string content even for vision
+              ...(typeof userContent !== 'string' ? { text: lastMessage.content } : {})
+            }
           ],
           stream: false,
         },
@@ -147,7 +153,8 @@ export async function sendMessageToGemini(
 
     const history = messages.slice(0, -1).map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: mapMessageToParts(msg)
+      parts: mapMessageToParts(msg),
+      content: msg.content // Standard content field for compatibility
     }));
 
     const lastMessage = messages[messages.length - 1];
@@ -157,7 +164,7 @@ export async function sendMessageToGemini(
       model: modelName,
       contents: [
         ...history,
-        { role: 'user', parts }
+        { role: 'user', parts, content: lastMessage.content }
       ],
       config: {
         systemInstruction: systemInstruction,

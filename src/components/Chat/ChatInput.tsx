@@ -6,11 +6,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote } from 'lucide-react';
+import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, FilePlus } from 'lucide-react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatMessageDate } from '../../lib/utils';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { Toast } from '@capacitor/toast';
 
 interface ChatInputProps {
@@ -81,6 +82,26 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     } catch (error: any) {
       if (error?.message !== 'User cancelled photos app') {
         console.error('Camera error:', error);
+      }
+    }
+  };
+
+  const pickFile = async () => {
+    try {
+      const result = await FilePicker.pickFiles({
+        types: ['image/*'],
+        limit: 1,
+        readData: true
+      });
+
+      if (result.files.length > 0 && result.files[0].data) {
+        const file = result.files[0];
+        const dataUrl = `data:${file.mimeType};base64,${file.data}`;
+        setPreviewImage(dataUrl);
+      }
+    } catch (error: any) {
+      if (!error?.message?.includes('cancel')) {
+        console.error('File picker error:', error);
       }
     }
   };
@@ -265,6 +286,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
               title="点击拍照，长按选择图片"
             >
               <Camera size={20} />
+            </Button>
+            <Button 
+              id="chat-file-picker-button"
+              type="button"
+              variant="ghost" 
+              size="icon" 
+              className="shrink-0 w-11 h-11 rounded-full bg-card border select-none active:scale-95 transition-transform"
+              onClick={pickFile}
+              disabled={isRecording}
+              title="选择文件"
+            >
+              <FilePlus size={20} />
             </Button>
           </div>
           

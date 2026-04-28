@@ -26,7 +26,6 @@ interface SettingsDialogProps {
   settings: AppSettings;
   onSave: (settings: AppSettings) => void;
   onCheckUpdate: () => Promise<{ success: boolean; data?: any; error?: string }>;
-  version: string;
 }
 
 export const SettingsDialog: React.FC<SettingsDialogProps> = ({
@@ -35,7 +34,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   settings,
   onSave,
   onCheckUpdate,
-  version,
 }) => {
   const [localSettings, setLocalSettings] = React.useState<AppSettings>(settings);
   const [updateStatus, setUpdateStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
@@ -150,7 +148,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="flex items-center justify-between">
             <DialogTitle>应用设置</DialogTitle>
             <span className="text-[10px] font-mono text-muted-foreground mr-6">
-              {version}
+              {localStorage.getItem('app_version') || 'v0.0.2'}
             </span>
           </div>
         </DialogHeader>
@@ -191,20 +189,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="welcomeMessage" className="text-right text-xs">欢迎标语</Label>
             <Input id="welcomeMessage" name="welcomeMessage" value={localSettings.welcomeMessage || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" />
-          </div>
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label className="text-right text-xs">启动时发送</Label>
-            <div className="col-span-3 flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="sendWelcomeOnStart"
-                name="sendWelcomeOnStart"
-                checked={localSettings.sendWelcomeOnStart ?? true}
-                onChange={(e) => setLocalSettings(prev => ({ ...prev, sendWelcomeOnStart: e.target.checked }))}
-                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
-              />
-              <span className="text-[10px] text-muted-foreground">打开应用时是否自动发送欢迎语</span>
-            </div>
           </div>
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="systemInstruction" className="text-right text-xs">回复逻辑</Label>

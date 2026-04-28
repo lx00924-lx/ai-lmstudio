@@ -5,6 +5,8 @@
 
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Message, AppSettings } from '../../types';
 import { cn, formatMessageDate } from '../../lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
@@ -327,24 +329,46 @@ const MessageItem: React.FC<{
             </>
           )}
 
-          {message.content && (
-            <div className={cn(
-              "prose prose-sm dark:prose-invert max-w-none",
-              (message.type === 'image' || message.type === 'voice') && "mt-2 pt-2 border-t border-border/50"
-            )}>
-              {isSearching ? (
-                <div className="whitespace-pre-wrap">
-                  <HighlightedText 
-                    text={message.content} 
-                    query={searchQuery} 
-                    isActive={message.id === activeSearchMatchId}
-                  />
+              {message.content && (
+                <div className={cn(
+                  "prose prose-sm dark:prose-invert max-w-none",
+                  (message.type === 'image' || message.type === 'voice') && "mt-2 pt-2 border-t border-border/50"
+                )}>
+                  {isSearching ? (
+                    <div className="whitespace-pre-wrap">
+                      <HighlightedText 
+                        text={message.content} 
+                        query={searchQuery} 
+                        isActive={message.id === activeSearchMatchId}
+                      />
+                    </div>
+                  ) : (
+                    <ReactMarkdown
+                      components={{
+                        code({ node, inline, className, children, ...props }: any) {
+                          const match = /language-(\w+)/.exec(className || '');
+                          return !inline && match ? (
+                            <SyntaxHighlighter
+                              style={oneDark}
+                              language={match[1]}
+                              PreTag="div"
+                              {...props}
+                            >
+                              {String(children).replace(/\n$/, '')}
+                            </SyntaxHighlighter>
+                          ) : (
+                            <code className={className} {...props}>
+                              {children}
+                            </code>
+                          );
+                        },
+                      }}
+                    >
+                      {message.content}
+                    </ReactMarkdown>
+                  )}
                 </div>
-              ) : (
-                <ReactMarkdown>{message.content}</ReactMarkdown>
               )}
-            </div>
-          )}
         </div>
         <span className="text-[10px] text-muted-foreground mt-1 px-1">
           {formatMessageDate(message.timestamp)}
