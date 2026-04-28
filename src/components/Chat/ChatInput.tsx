@@ -6,12 +6,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, FilePlus } from 'lucide-react';
+import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus } from 'lucide-react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatMessageDate } from '../../lib/utils';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
-import { FilePicker } from '@capawesome/capacitor-file-picker';
 import { Toast } from '@capacitor/toast';
 
 interface ChatInputProps {
@@ -24,6 +23,7 @@ interface ChatInputProps {
 export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessage, onCancelQuote }) => {
   const [text, setText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
@@ -69,6 +69,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
 
   const takePhoto = async () => {
     try {
+      setIsMenuOpen(false);
       const image = await CapCamera.getPhoto({
         quality: 90,
         allowEditing: false,
@@ -86,28 +87,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     }
   };
 
-  const pickFile = async () => {
-    try {
-      const result = await FilePicker.pickFiles({
-        types: ['image/*'],
-        limit: 1,
-        readData: true
-      });
-
-      if (result.files.length > 0 && result.files[0].data) {
-        const file = result.files[0];
-        const dataUrl = `data:${file.mimeType};base64,${file.data}`;
-        setPreviewImage(dataUrl);
-      }
-    } catch (error: any) {
-      if (!error?.message?.includes('cancel')) {
-        console.error('File picker error:', error);
-      }
-    }
-  };
-
   const pickImage = async () => {
     try {
+      setIsMenuOpen(false);
       const image = await CapCamera.getPhoto({
         quality: 90,
         allowEditing: false,
@@ -271,50 +253,50 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
           )}
         </AnimatePresence>
 
-        <div className="flex items-center gap-3 bg-white dark:bg-[rgba(255,255,255,0.03)] border border-border rounded-[24px] p-2 h-20 shadow-sm dark:shadow-none">
-          <div className="flex gap-1">
-            <Button 
-              type="button"
-              variant="ghost" 
-              size="icon" 
-              className="shrink-0 w-11 h-11 rounded-full bg-card border select-none active:scale-95 transition-transform"
-              onPointerDown={handleCameraStart}
-              onPointerUp={handleCameraEnd}
-              onPointerLeave={handleCameraEnd}
-              onClick={handleCameraClick}
-              disabled={isRecording}
-              title="点击拍照，长按选择图片"
+        <AnimatePresence>
+          {isMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="flex gap-4 p-4 bg-white dark:bg-[#1a1a1a] border border-border rounded-[24px] shadow-lg mb-2"
             >
-              <Camera size={20} />
-            </Button>
-            <Button 
-              id="chat-file-picker-button"
-              type="button"
-              variant="ghost" 
-              size="icon" 
-              className="shrink-0 w-11 h-11 rounded-full bg-card border select-none active:scale-95 transition-transform"
-              onClick={pickFile}
-              disabled={isRecording}
-              title="选择文件"
-            >
-              <FilePlus size={20} />
-            </Button>
-          </div>
-          
-          {/* Hidden inputs for fallback if needed, but we use Capacitor now */}
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleImageUpload} 
-            accept="image/*" 
-            className="hidden" 
-          />
+              <div className="flex flex-col items-center gap-2">
+                <Button 
+                  type="button"
+                  variant="ghost" 
+                  size="icon" 
+                  className="w-14 h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
+                  onPointerDown={handleCameraStart}
+                  onPointerUp={handleCameraEnd}
+                  onPointerLeave={handleCameraEnd}
+                  onClick={handleCameraClick}
+                  disabled={isRecording}
+                >
+                  <Camera size={24} />
+                </Button>
+                <span className="text-[10px] text-muted-foreground font-medium">拍照/相册</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
+        <div className="flex items-center gap-3 bg-white dark:bg-[rgba(255,255,255,0.03)] border border-border rounded-[24px] p-2 h-20 shadow-sm dark:shadow-none">
+          {/* Main Input Area */}
           <div className="relative flex-1 h-full flex items-center">
             <Input
+              id="chat-text-input"
               ref={inputRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                if (e.target.value.trim() && isMenuOpen) {
+                  setIsMenuOpen(false);
+                }
+              }}
+              onFocus={() => {
+                if (isMenuOpen) setIsMenuOpen(false);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -329,7 +311,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
               variant="ghost"
               size="icon"
               className={cn(
-                "w-11 h-11 rounded-full transition-colors bg-card border",
+                "w-11 h-11 rounded-full transition-colors bg-card border mr-1",
                 isRecording ? "text-primary border-primary/50" : "text-muted-foreground"
               )}
               onPointerDown={handleMicDown}
@@ -350,12 +332,44 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
 
           <Button 
             type="button"
-            onClick={handleSend} 
-            disabled={(!text.trim() && !previewImage && !audioUrl)}
+            onClick={() => {
+              if (text.trim() || previewImage || audioUrl) {
+                handleSend();
+              } else {
+                setIsMenuOpen(!isMenuOpen);
+              }
+            }} 
             size="icon"
-            className="shrink-0 w-12 h-12 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_15px_rgba(0,210,255,0.4)]"
+            className={cn(
+              "shrink-0 w-12 h-12 rounded-full transition-all duration-300 active:scale-95",
+              (text.trim() || previewImage || audioUrl)
+                ? "bg-primary text-primary-foreground shadow-[0_0_15px_rgba(0,210,255,0.4)]"
+                : "bg-muted text-muted-foreground hover:bg-muted/80 shadow-none rotate-0"
+            )}
           >
-            <Send size={20} />
+            <AnimatePresence mode="wait">
+              {(text.trim() || previewImage || audioUrl) ? (
+                <motion.div
+                  key="send"
+                  initial={{ opacity: 0, scale: 0.5, rotate: -45 }}
+                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                  exit={{ opacity: 0, scale: 0.5, rotate: 45 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Send size={20} />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="plus"
+                  initial={{ opacity: 0, scale: 0.5, rotate: 45 }}
+                  animate={{ opacity: 1, scale: 1, rotate: isMenuOpen ? 45 : 0 }}
+                  exit={{ opacity: 0, scale: 0.5, rotate: -45 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Plus size={24} />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </Button>
         </div>
       </div>

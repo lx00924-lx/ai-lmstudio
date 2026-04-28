@@ -38,6 +38,14 @@ export async function sendMessageToGemini(
       const mapMessageToCustomContent = (msg: Message) => {
         const parts: any[] = [];
         let text = msg.content;
+        
+        // Ensure some text exists for all messages to satisfy strict proxies
+        if (!text) {
+          if (msg.type === 'image') text = '[图片]';
+          else if (msg.type === 'voice') text = '[语音]';
+          else text = ' '; // At least a space
+        }
+
         if (msg.quote) {
           text = `引用消息 [${msg.quote.userName}]: "${msg.quote.content}"\n\n回复上面的消息: ${text}`;
         }
@@ -61,11 +69,15 @@ export async function sendMessageToGemini(
         return parts.length === 1 && parts[0].type === 'text' ? parts[0].text : parts;
       };
 
-      const history = messages.slice(0, -1).map(msg => ({
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content: mapMessageToCustomContent(msg),
-        message_content: msg.content // Optionally adding a text-only companion if content is an array
-      }));
+      const history = messages.slice(0, -1).map(msg => {
+        const customContent = mapMessageToCustomContent(msg);
+        return {
+          role: msg.role === 'assistant' ? 'assistant' : 'user',
+          content: customContent || ' ',
+          // Some proxies require a string 'content' or 'message_content'
+          message_content: msg.content || ' '
+        };
+      });
 
       const lastMessage = messages[messages.length - 1];
       const userContent = mapMessageToCustomContent(lastMessage);
@@ -85,9 +97,9 @@ export async function sendMessageToGemini(
             ...history,
             { 
               role: 'user', 
-              content: userContent,
+              content: userContent || ' ',
               // Some proxies expect a string content even for vision
-              ...(typeof userContent !== 'string' ? { text: lastMessage.content } : {})
+              ...(typeof userContent !== 'string' ? { text: lastMessage.content || ' ' } : {})
             }
           ],
           stream: false,
@@ -125,14 +137,19 @@ export async function sendMessageToGemini(
       const msgParts: any[] = [];
       let finalContent = msg.content;
 
+      // Ensure some text exists for all messages
+      if (!finalContent) {
+        if (msg.type === 'image') finalContent = '[图片]';
+        else if (msg.type === 'voice') finalContent = '[语音]';
+        else finalContent = ' ';
+      }
+
       // Handle quotes
       if (msg.quote) {
         finalContent = `引用消息 [${msg.quote.userName}]: "${msg.quote.content}"\n\n回复上面的消息: ${finalContent}`;
       }
 
-      if (finalContent || msg.type === 'text') {
-        msgParts.push({ text: finalContent });
-      }
+      msgParts.push({ text: finalContent || ' ' });
 
       if ((msg.type === 'image' || msg.type === 'voice') && msg.mediaUrl) {
         try {
