@@ -319,6 +319,10 @@ const MessageItem: React.FC<{
               alt="Uploaded" 
               className="rounded-lg mb-2 max-w-full h-auto"
               referrerPolicy="no-referrer"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = 'none';
+                console.error("Image render error");
+              }}
             />
           )}
           

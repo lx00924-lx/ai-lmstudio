@@ -134,6 +134,7 @@ export async function sendMessageToGemini(
 
     // Helper to map message to Gemini parts
     const mapMessageToParts = (msg: Message) => {
+      console.log("Mapping message to parts, type:", msg.type, "hasMediaUrl:", !!msg.mediaUrl);
       const msgParts: any[] = [];
       let finalContent = msg.content;
 
@@ -153,8 +154,16 @@ export async function sendMessageToGemini(
 
       if ((msg.type === 'image' || msg.type === 'voice') && msg.mediaUrl) {
         try {
-          const base64Data = msg.mediaUrl.split(',')[1];
-          const mimeType = msg.mediaUrl.split(';')[0].split(':')[1];
+          // Robustly handle data URI
+          const commaIndex = msg.mediaUrl.indexOf(',');
+          if (commaIndex === -1) throw new Error("Invalid media URL format: no comma");
+          
+          const base64Data = msg.mediaUrl.substring(commaIndex + 1);
+          const metaPart = msg.mediaUrl.substring(0, commaIndex);
+          
+          const mimeTypeMatch = metaPart.match(/data:([a-zA-Z0-9-]+\/[a-zA-Z0-9-.+]+)/);
+          const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : (msg.type === 'voice' ? 'audio/wav' : 'image/jpeg');
+
           msgParts.push({
             inlineData: {
               data: base64Data,
@@ -171,7 +180,6 @@ export async function sendMessageToGemini(
     const history = messages.slice(0, -1).map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: mapMessageToParts(msg),
-      content: msg.content // Standard content field for compatibility
     }));
 
     const lastMessage = messages[messages.length - 1];
@@ -181,7 +189,7 @@ export async function sendMessageToGemini(
       model: modelName,
       contents: [
         ...history,
-        { role: 'user', parts, content: lastMessage.content }
+        { role: 'user', parts }
       ],
       config: {
         systemInstruction: systemInstruction,

@@ -95,6 +95,7 @@ export default function App() {
     return (savedTheme as 'light' | 'dark') || 'dark';
   });
 
+
   // Wake Lock implementation
   useEffect(() => {
     let wakeLock: WakeLockSentinel | null = null;
@@ -152,7 +153,15 @@ export default function App() {
 
 
   useEffect(() => {
-    localStorage.setItem('chat_history', JSON.stringify(state.messages));
+    try {
+        localStorage.setItem('chat_history', JSON.stringify(state.messages));
+    } catch (error) {
+        if (error instanceof Error && (error.name === 'QuotaExceededError' || error.message.includes('QuotaExceededError'))) {
+            console.warn('LocalStorage quota exceeded, please clear some history.');
+        } else {
+            console.error('Failed to save chat history', error);
+        }
+    }
   }, [state.messages]);
 
   useEffect(() => {
