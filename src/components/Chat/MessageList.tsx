@@ -299,12 +299,12 @@ const MessageItem: React.FC<{
         isSelectionMode && !isSelected && "opacity-50"
       )}>
         <div className="flex items-center gap-2 mb-1 px-1">
-          <span className="text-[10px] font-medium text-muted-foreground tracking-wider">
+          <span className="text-[10px] font-medium text-muted-foreground tracking-wider select-none">
             {message.role === 'assistant' ? settings.aiName : settings.userName}
           </span>
         </div>
         <div className={cn(
-          "px-5 py-4 rounded-[20px] text-[15px] leading-relaxed transition-all relative overflow-hidden",
+          "px-5 py-4 rounded-[20px] text-[15px] leading-relaxed transition-all relative overflow-hidden select-text",
           message.role === 'user' 
             ? "bg-white dark:bg-card border border-border text-black dark:text-foreground" 
             : "bg-white dark:bg-card border border-border text-black dark:text-foreground",
@@ -382,7 +382,7 @@ const MessageItem: React.FC<{
                 </div>
               )}
         </div>
-        <span className="text-[10px] text-muted-foreground mt-1 px-1">
+        <span className="text-[10px] text-muted-foreground mt-1 px-1 select-none">
           {formatMessageDate(message.timestamp)}
         </span>
       </div>
@@ -409,11 +409,47 @@ export const MessageList: React.FC<MessageListProps> = ({
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
   const [isDragging, setIsDragging] = React.useState(false);
   const [contextMenu, setContextMenu] = React.useState<{ id: string; x: number; y: number } | null>(null);
+  const contextMenuRef = React.useRef<{ id: string; x: number; y: number } | null>(null);
   const [highlightMessageId, setHighlightMessageId] = React.useState<string | null>(null);
   const messageRefs = React.useRef<{ [key: string]: HTMLDivElement | null }>({});
   const replayRefs = React.useRef<{ [key: string]: () => void }>({});
   const lastSelectedId = React.useRef<string | null>(null);
   const touchStartPos = React.useRef<{ x: number; y: number } | null>(null);
+
+  React.useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection) return;
+      
+      const hasSelection = selection.type === 'Range' && selection.toString().length > 0;
+
+      if (hasSelection) {
+        setContextMenu(null);
+      } else {
+        // Selection is cancelled or no text selected
+        setContextMenu(null);
+        contextMenuRef.current = null;
+      }
+    };
+    
+    const handleRelease = () => {
+       // On release, if a selection exists, restore menu
+       const selection = window.getSelection();
+       if (selection && selection.toString().length > 0 && contextMenuRef.current && !contextMenu) {
+           setContextMenu(contextMenuRef.current);
+       }
+    };
+    
+    document.addEventListener('selectionchange', handleSelectionChange);
+    window.addEventListener('mouseup', handleRelease);
+    window.addEventListener('touchend', handleRelease);
+    
+    return () => {
+        document.removeEventListener('selectionchange', handleSelectionChange);
+        window.removeEventListener('mouseup', handleRelease);
+        window.removeEventListener('touchend', handleRelease);
+    }
+  }, [contextMenu]);
 
   const scrollToMessage = (id: string) => {
     const element = messageRefs.current[id];
@@ -423,6 +459,24 @@ export const MessageList: React.FC<MessageListProps> = ({
       setTimeout(() => setHighlightMessageId(null), 2000);
     } else {
       Toast.show({ text: '找不到原消息' });
+    }
+  };
+
+  const selectAllText = (id: string) => {
+    const el = messageRefs.current[id];
+    if (el) {
+       // 查找消息内容容器以便精确定位
+       const contentEl = el.querySelector('.prose');
+       if (contentEl) {
+         const selection = window.getSelection();
+         // 增加检查：如果已经有文本被选中，不强制全选
+         if (selection && selection.toString().length > 0) return;
+         
+         const range = document.createRange();
+         range.selectNodeContents(contentEl);
+         selection?.removeAllRanges();
+         selection?.addRange(range);
+       }
     }
   };
 
@@ -462,24 +516,39 @@ export const MessageList: React.FC<MessageListProps> = ({
       return;
     }
     
+    // Check if text is currently selected
+    if (window.getSelection()?.toString()) {
+        return;
+    }
+
     const x = e.clientX;
     const y = e.clientY;
     touchStartPos.current = { x, y };
 
     longPressTimer.current = setTimeout(() => {
-      if (isSearching) {
-        onEnterSelectionMode(id);
-        setIsDragging(true);
-        lastSelectedId.current = id;
-      } else {
-        setContextMenu({ id, x, y });
-      }
-      touchStartPos.current = null;
+        // Automatically select text and show menu
+        selectAllText(id);
+        
+        if (isSearching) {
+          onEnterSelectionMode(id);
+          setIsDragging(true);
+          lastSelectedId.current = id;
+        } else {
+          const menuData = { id, x, y };
+          setContextMenu(menuData);
+          contextMenuRef.current = menuData;
+        }
+        touchStartPos.current = null;
     }, 600);
   };
 
   const handleTouchStart = (e: React.TouchEvent, id: string) => {
     if (isSelectionMode) return;
+    
+    // Check if text is currently selected
+    if (window.getSelection()?.toString()) {
+        return;
+    }
     
     const touch = e.touches[0];
     const x = touch.clientX;
@@ -487,14 +556,19 @@ export const MessageList: React.FC<MessageListProps> = ({
     touchStartPos.current = { x, y };
 
     longPressTimer.current = setTimeout(() => {
-      if (isSearching) {
-        onEnterSelectionMode(id);
-        setIsDragging(true);
-        lastSelectedId.current = id;
-      } else {
-        setContextMenu({ id, x, y });
-      }
-      touchStartPos.current = null;
+        // Automatically select text and show menu
+        selectAllText(id);
+        
+        if (isSearching) {
+          onEnterSelectionMode(id);
+          setIsDragging(true);
+          lastSelectedId.current = id;
+        } else {
+          const menuData = { id, x, y };
+          setContextMenu(menuData);
+          contextMenuRef.current = menuData;
+        }
+        touchStartPos.current = null;
     }, 600);
   };
 
@@ -614,7 +688,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   return (
     <div 
       ref={scrollRef} 
-        className="flex-1 overflow-y-auto p-4 space-y-6 pb-24 select-none"
+        className="flex-1 overflow-y-auto p-4 space-y-6 pb-24"
         onTouchMove={handleTouchMove}
       >
         {messages.map((message) => (
