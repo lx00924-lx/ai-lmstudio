@@ -30,7 +30,6 @@ const DEFAULT_SETTINGS: AppSettings = {
   userName: '用户',
   userAvatar: '',
   aiName: 'Aether-X',
-  aiSubtitle: '专业版',
   aiAvatar: '',
   apiKey: '',
   apiEndpoint: '',
@@ -527,7 +526,7 @@ export default function App() {
       
       const data = await response.json();
       const latestVersion = data.tag_name;
-      const currentVersion = localStorage.getItem('app_version') || 'v0.0.2'; 
+      const currentVersion = localStorage.getItem('app_version') || 'v0.0.5'; 
 
       // Find APK in assets
       const apkAsset = data.assets?.find((asset: any) => asset.name.endsWith('.apk'));
@@ -644,7 +643,6 @@ export default function App() {
             {state.settings.splashText || state.settings.aiName}
           </h1>
           <p className="text-sm text-muted-foreground font-medium uppercase tracking-[0.2em] opacity-60">
-            {state.settings.aiSubtitle}
           </p>
         </div>
       </motion.div>
@@ -762,7 +760,7 @@ export default function App() {
             <Button
               variant="ghost"
               size="icon"
-              className="rounded-full w-11 h-11 bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+              className="rounded-full w-11 h-11 bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 -ml-2"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             >
               <PanelLeft size={20} />
@@ -907,7 +905,7 @@ export default function App() {
                     exit={{ opacity: 0, y: -10 }}
                     className="text-center"
                   >
-                    <h1 className="text-lg font-semibold leading-none">{state.settings.aiName} {state.settings.aiSubtitle}</h1>
+                    <h1 className="text-lg font-semibold leading-none">{state.settings.aiName}</h1>
                     <p className="text-[10px] text-muted-foreground mt-1">{state.settings.modelName}</p>
                   </motion.div>
                 )}

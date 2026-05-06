@@ -213,7 +213,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="flex items-center justify-between">
             <DialogTitle>应用设置</DialogTitle>
             <span className="text-[10px] font-mono text-muted-foreground mr-6">
-              {localStorage.getItem('app_version') || 'v0.0.4'}
+              {localStorage.getItem('app_version') || 'v0.0.5'}
             </span>
           </div>
         </DialogHeader>
@@ -228,10 +228,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="aiName" className="text-right text-xs">AI 名称</Label>
             <Input id="aiName" name="aiName" value={localSettings.aiName} onChange={handleChange} className="col-span-3 h-8 text-xs" />
-          </div>
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="aiSubtitle" className="text-right text-xs">AI 副标题</Label>
-            <Input id="aiSubtitle" name="aiSubtitle" value={localSettings.aiSubtitle} onChange={handleChange} className="col-span-3 h-8 text-xs" />
           </div>
 
           <FileUploadField label="AI 头像" field="aiAvatar" />

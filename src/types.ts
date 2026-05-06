@@ -25,7 +25,6 @@ export interface AppSettings {
   userName: string;
   userAvatar: string;
   aiName: string;
-  aiSubtitle: string;
   aiAvatar: string;
   apiKey: string;
   apiEndpoint: string;
