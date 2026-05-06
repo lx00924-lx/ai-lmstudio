@@ -662,6 +662,7 @@ export default function App() {
       <AnimatePresence mode="wait">
         {showSplash && state.settings.showSplashScreen && <SplashScreen key="splash" />}
       </AnimatePresence>
+
       {/* Sidebar Overlay Backdrop */}
       <AnimatePresence>
         {isSidebarOpen && (
@@ -679,18 +680,17 @@ export default function App() {
       <AnimatePresence>
         {isSidebarOpen && (
           <motion.aside
-            initial={{ x: -80 }}
+            initial={{ x: -224 }}
             animate={{ x: 0 }}
-            exit={{ x: -80 }}
+            exit={{ x: -224 }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed inset-y-0 left-0 w-20 border-r bg-sidebar flex flex-col items-center py-8 gap-6 shrink-0 z-50 shadow-2xl"
+            className="fixed inset-y-0 left-0 w-56 border-r bg-sidebar flex flex-col items-start py-8 px-4 gap-6 shrink-0 z-50 shadow-2xl"
           >
-            <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2 w-full">
               <Button 
                 variant="ghost" 
-                size="icon" 
                 className={cn(
-                  "w-11 h-11 rounded-xl bg-muted border transition-all hover:bg-primary/10 hover:text-primary active:scale-95",
+                  "w-44 justify-start gap-4 rounded-full bg-muted border transition-all hover:bg-primary/10 hover:text-primary active:scale-95",
                   isSearching ? "text-primary border-primary/50" : "text-muted-foreground"
                 )}
                 onClick={() => {
@@ -699,51 +699,52 @@ export default function App() {
                 }}
               >
                 <Search size={20} />
+                <span>搜索聊天</span>
               </Button>
               <Button 
                 variant="ghost" 
-                size="icon" 
-                className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                className="w-44 justify-start gap-4 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                 onClick={handleExportChat}
                 title="导出记录"
               >
                 <Upload size={20} />
+                <span>导出记录</span>
               </Button>
               <Button 
                 variant="ghost" 
-                size="icon" 
-                className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                className="w-44 justify-start gap-4 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                 onClick={handleImportChat}
                 title="导入记录"
               >
                 <Download size={20} />
+                <span>导入记录</span>
               </Button>
               <Button 
                 variant="ghost" 
-                size="icon" 
-                className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                className="w-44 justify-start gap-4 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                 onClick={clearChat}
               >
                 <Trash2 size={20} />
+                <span>清除记录</span>
               </Button>
             </div>
 
-            <div className="mt-auto flex flex-col gap-4">
+            <div className="mt-auto flex flex-col gap-2 w-full">
               <Button 
                 variant="ghost" 
-                size="icon" 
-                className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                className="w-44 justify-start gap-4 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                 onClick={toggleTheme}
               >
                 {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+                <span>切换主题</span>
               </Button>
               <Button 
                 variant="ghost" 
-                size="icon" 
-                className="w-11 h-11 rounded-xl bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                className="w-44 justify-start gap-4 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                 onClick={() => setIsSettingsOpen(true)}
               >
                 <Settings size={20} />
+                <span>设置</span>
               </Button>
             </div>
           </motion.aside>
