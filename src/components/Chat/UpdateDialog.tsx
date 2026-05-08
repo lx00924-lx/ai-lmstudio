@@ -24,6 +24,7 @@ interface UpdateDialogProps {
   changelog: string;
   downloadUrl: string;
   onUpdate?: () => void;
+  isUpdating?: boolean;
 }
 
 export const UpdateDialog: React.FC<UpdateDialogProps> = ({
@@ -33,6 +34,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
   changelog,
   downloadUrl,
   onUpdate,
+  isUpdating = false,
 }) => {
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -58,12 +60,24 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
           </div>
         </div>
 
+        {isUpdating && (
+          <div className="mb-4">
+            <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+              <div className="h-full bg-primary animate-pulse w-full"></div>
+            </div>
+            <p className="text-xs text-center mt-2 text-muted-foreground">正在下载更新包...</p>
+          </div>
+        )}
+
         <DialogFooter className="flex gap-2 sm:gap-0">
-          <Button variant="ghost" onClick={onClose} className="flex-1 rounded-xl h-11">
-            以后再说
-          </Button>
+          {!isUpdating && (
+            <Button variant="ghost" onClick={onClose} className="flex-1 rounded-xl h-11">
+              以后再说
+            </Button>
+          )}
           <Button 
-            className="flex-1 rounded-xl h-11 bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:opacity-90"
+            className="flex-1 rounded-xl h-11 bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:opacity-90 disabled:opacity-50"
+            disabled={isUpdating}
             onClick={() => {
               if (onUpdate) {
                 onUpdate();
@@ -73,8 +87,12 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
               }
             }}
           >
-            <Rocket size={16} className="mr-2" />
-            立即更新
+            {isUpdating ? '更新中...' : (
+              <>
+                <Rocket size={16} className="mr-2" />
+                立即更新
+              </>
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

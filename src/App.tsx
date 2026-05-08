@@ -119,6 +119,7 @@ export default function App() {
 
   const [quotedMessage, setQuotedMessage] = useState<Message | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(initialTheme);
+  const [isUpdating, setIsUpdating] = useState(false);
 
 
   // Wake Lock implementation
@@ -626,12 +627,14 @@ export default function App() {
 
   const handleDownloadAndInstall = async (url: string, fileName: string) => {
     try {
+      setIsUpdating(true);
       await Toast.show({ text: '开始下载更新包...', duration: 'long' });
       
       const isWeb = !window.hasOwnProperty('Capacitor') || (window as any).Capacitor?.getPlatform() === 'web';
       
       if (isWeb) {
         window.open(url, '_blank');
+        setIsUpdating(false);
         return;
       }
 
@@ -656,6 +659,8 @@ export default function App() {
       console.error('Update failed', error);
       await Toast.show({ text: '更新失败，请前往浏览器手动下载' });
       window.open(url, '_blank');
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -1106,6 +1111,7 @@ export default function App() {
           version={updateInfo.version}
           changelog={updateInfo.body}
           downloadUrl={updateInfo.apkUrl || updateInfo.url}
+          isUpdating={isUpdating}
           onUpdate={() => {
             if (updateInfo.apkUrl) {
               handleDownloadAndInstall(updateInfo.apkUrl, `update_${updateInfo.version}.apk`);
