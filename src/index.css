@@ -121,8 +121,12 @@
   * {
     @apply border-border outline-ring/50;
     }
-  body {
+  html, body, #root {
     @apply bg-background text-foreground;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    height: 100%;
     }
   .dark body {
     background: radial-gradient(circle at top right, #1A1C23 0%, #08090B 70%);
@@ -142,4 +146,26 @@
 
 .animate-pulse-highlight {
   animation: pulse-highlight 2s ease-in-out;
+}
+
+/* Hide scrollbars globally */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}
+*::-webkit-scrollbar-track {
+  display: none !important;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent !important;
+  display: none !important;
+}
+html, body, main, div, aside, section, article, header, footer, nav, ul, ol, li, dl, dt, dd, table, tbody, thead, tfoot, select, textarea, input {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
 }

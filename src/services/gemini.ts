@@ -83,7 +83,10 @@ export async function sendMessageToGemini(
       const userContent = mapMessageToCustomContent(lastMessage);
 
       // Use CapacitorHttp for better compatibility and to bypass CORS on mobile
-      const options = {
+      // Try streaming first, fall back to non-streaming if not supported
+      const streamEnabled = true;
+      
+      const options: any = {
         url: url,
         method: 'POST',
         headers: {
@@ -98,27 +101,80 @@ export async function sendMessageToGemini(
             { 
               role: 'user', 
               content: userContent || ' ',
-              // Some proxies expect a string content even for vision
               ...(typeof userContent !== 'string' ? { text: lastMessage.content || ' ' } : {})
             }
           ],
-          stream: false,
+          stream: streamEnabled,
         },
         connectTimeout: 30000,
-        readTimeout: 60000
+        readTimeout: 120000
       };
 
-      const response = await CapacitorHttp.request(options);
-
-      if (response.status < 200 || response.status >= 300) {
-        console.error("API Response Error:", response);
-        throw new Error(`API 请求失败: ${response.status} ${response.data?.error?.message || ''}`);
-      }
-
-      const fullText = response.data.choices[0]?.message?.content || "";
+      let fullText = "";
       
-      if (fullText) {
-        onChunk?.(fullText);
+      try {
+        const response = await CapacitorHttp.request(options);
+
+        if (response.status < 200 || response.status >= 300) {
+          console.error("API Response Error:", response);
+          
+          // If streaming failed, retry without streaming
+          options.data.stream = false;
+          const fallbackResponse = await CapacitorHttp.request(options);
+          
+          if (fallbackResponse.status < 200 || fallbackResponse.status >= 300) {
+            throw new Error(`API 请求失败: ${fallbackResponse.status} ${fallbackResponse.data?.error?.message || ''}`);
+          }
+          
+          fullText = fallbackResponse.data.choices[0]?.message?.content || "";
+          if (fullText) {
+            onChunk?.(fullText);
+          }
+          return fullText;
+        }
+
+        // Handle streaming response - some proxies return SSE format
+        const choiceData = response.data.choices?.[0];
+        
+        if (choiceData?.message?.content) {
+          // Non-streaming response even though we requested stream
+          fullText = choiceData.message.content;
+          onChunk?.(fullText);
+        } else if (choiceData?.delta?.content) {
+          // Single chunk streaming response
+          fullText = choiceData.delta.content;
+          onChunk?.(fullText);
+        } else if (typeof response.data === 'string') {
+          // Raw SSE string - parse it
+          const lines = response.data.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const jsonStr = line.substring(6);
+                const parsed = JSON.parse(jsonStr);
+                const deltaContent = parsed.choices?.[0]?.delta?.content;
+                if (deltaContent) {
+                  fullText += deltaContent;
+                  onChunk?.(deltaContent);
+                }
+              } catch {}
+            }
+          }
+        }
+
+        // Check for reasoning/thinking content in some model responses
+        const reasoning = choiceData?.message?.reasoning_content || 
+                         choiceData?.message?.reasoning || 
+                         choiceData?.delta?.reasoning_content ||
+                         choiceData?.delta?.reasoning;
+        
+        if (reasoning) {
+          console.log('Reasoning content detected:', reasoning);
+        }
+
+      } catch (error) {
+        // If CapacitorHttp fails, try native fetch as fallback
+        fullText = await fetchWithFallback(url, options, onChunk);
       }
       
       return fullText;
@@ -204,6 +260,13 @@ export async function sendMessageToGemini(
         fullText += text;
         onChunk?.(text);
       }
+      
+      // Check for reasoning/thinking content in GoogleGenAI responses
+      const reasoning = (chunk as any).reasoning || (chunk as any).thinking;
+      if (reasoning && onChunk) {
+        // Send reasoning separately with a marker
+        onChunk?.(`[THINKING]${reasoning}`);
+      }
     }
 
     return fullText;
@@ -217,4 +280,69 @@ export async function sendMessageToGemini(
     }
     throw new Error("发生未知错误，请稍后再试。");
   }
+}
+
+// Fallback fetch function for streaming support
+async function fetchWithFallback(
+  url: string, 
+  options: any, 
+  onChunk?: (chunk: string) => void
+): Promise<string> {
+  let fullText = "";
+  
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: options.headers,
+      body: JSON.stringify(options.data),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    // Try streaming with ReadableStream
+    const contentType = response.headers.get('content-type') || '';
+    
+    if (contentType.includes('text/event-stream') || options.data?.stream) {
+      const reader = response.body?.getReader();
+      if (reader) {
+        const decoder = new TextDecoder();
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const jsonStr = line.substring(6);
+                const parsed = JSON.parse(jsonStr);
+                const deltaContent = parsed.choices?.[0]?.delta?.content;
+                if (deltaContent) {
+                  fullText += deltaContent;
+                  onChunk?.(deltaContent);
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+    } else {
+      // Non-streaming response
+      const data = await response.json();
+      fullText = data.choices?.[0]?.message?.content || "";
+      if (fullText) {
+        onChunk?.(fullText);
+      }
+    }
+  } catch (e) {
+    console.error('Fetch fallback error:', e);
+    throw new Error("网络连接错误，请检查您的网络设置。");
+  }
+  
+  return fullText;
 }

@@ -33,7 +33,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
   const micLongPressTimer = useRef<NodeJS.Timeout | null>(null);
   const isMicLongPress = useRef(false);
 
-  // Auto-focus when isRecording becomes false
   useEffect(() => {
     if (!isRecording) {
       const timer = setTimeout(() => {
@@ -43,7 +42,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     }
   }, [isRecording]);
 
-  // Auto-send when audioUrl is set
   useEffect(() => {
     if (audioUrl) {
       onSendMessage('', 'voice', audioUrl);
@@ -60,8 +58,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
         onSendMessage(text, 'text');
       }
       setText('');
-      
-      // Explicitly focus after a short delay to ensure DOM update
       setTimeout(() => {
         inputRef.current?.focus();
       }, 50);
@@ -152,7 +148,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
       }
       isMicLongPress.current = false;
     } else {
-      // It was a click
       if (isRecording) {
         stopRecording();
       } else {
@@ -161,21 +156,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPreviewImage(reader.result as string);
-        if (e.target) e.target.value = '';
-      };
-      reader.onerror = () => {
-        console.error('FileReader error');
-        Toast.show({ text: '图片读取失败，请尝试其他文件。' });
-      };
-      reader.readAsDataURL(file);
-    }
-  };
+
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -195,50 +176,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     };
   }, [isMenuOpen]);
 
+  const hasContent = text.trim() || previewImage;
+
   return (
     <div className="w-full" ref={containerRef}>
       <div className="max-w-2xl mx-auto space-y-4">
+        {/* Image Preview */}
         <AnimatePresence>
           {previewImage && (
             <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative flex flex-col gap-3 p-3 bg-card border border-primary/20 rounded-[32px] shadow-2xl max-w-sm w-full mx-auto"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="relative rounded-2xl overflow-hidden bg-muted border border-border/50"
             >
-              <div className="relative rounded-[24px] overflow-hidden aspect-video bg-muted border border-border/50">
-                <img src={previewImage} alt="Preview" className="w-full h-full object-cover" />
-                <div className="absolute top-3 left-3 px-2 py-1 bg-black/60 backdrop-blur-md rounded-lg text-[10px] text-white font-mono uppercase tracking-[0.2em] border border-white/10">
-                  Captured
-                </div>
-              </div>
-              
-              <div className="flex gap-3">
-                <Button 
-                  type="button"
-                  variant="outline" 
-                  className="flex-1 h-12 rounded-2xl border-muted-foreground/20 text-muted-foreground hover:text-foreground hover:bg-muted transition-all active:scale-95"
-                  onClick={() => {
-                    setPreviewImage(null);
-                    // Small delay to allow state update before opening camera
-                    setTimeout(() => takePhoto(), 100);
-                  }}
-                >
-                  重拍
-                </Button>
-                <Button 
-                  type="button"
-                  className="flex-1 h-12 rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:bg-primary/90 transition-all active:scale-95 font-medium"
-                  onClick={handleSend}
-                >
-                  发送
-                </Button>
-              </div>
-              
+              <img src={previewImage} alt="Preview" className="w-full h-auto max-h-72 object-cover" />
               <button 
                 type="button"
                 onClick={() => setPreviewImage(null)}
-                className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-2 shadow-xl hover:scale-110 active:scale-90 transition-all border-2 border-background"
+                className="absolute top-3 right-3 w-8 h-8 bg-black/60 backdrop-blur-sm text-white rounded-full flex items-center justify-center hover:bg-black/80 active:scale-90 transition-all"
               >
                 <X size={16} />
               </button>
@@ -246,102 +202,88 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
           )}
         </AnimatePresence>
 
+        {/* Quote Display */}
         <AnimatePresence>
           {quotedMessage && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              className="px-4 py-3 bg-muted/50 border border-border/50 rounded-2xl flex items-center justify-between gap-3 shadow-sm"
+              exit={{ opacity: 0, y: -10 }}
+              className="px-4 py-3 bg-muted/40 border-l-2 border-primary rounded-xl"
             >
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between mb-0.5">
-                  <div className="flex items-center gap-2">
-                    <Quote size={12} className="text-primary" />
-                    <span className="text-[10px] font-bold text-primary uppercase tracking-wider">{quotedMessage.role === 'assistant' ? 'AI' : '我'}</span>
-                  </div>
-                  <span className="text-[9px] text-muted-foreground/60">{formatMessageDate(quotedMessage.timestamp)}</span>
-                </div>
-                <p className="text-xs text-muted-foreground line-clamp-1 italic">
-                  {quotedMessage.content || (quotedMessage.type === 'voice' ? '[语音消息]' : '[图片消息]')}
-                </p>
+              <div className="flex items-center gap-2 mb-0.5">
+                <Quote size={11} className="text-primary shrink-0" />
+                <span className="text-[10px] font-bold text-primary uppercase tracking-wider">
+                  {quotedMessage.role === 'assistant' ? 'AI' : '我'}
+                </span>
+                <span className="text-[9px] text-muted-foreground/60 ml-auto">{formatMessageDate(quotedMessage.timestamp)}</span>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="w-8 h-8 rounded-full hover:bg-muted"
-                onClick={onCancelQuote}
-              >
-                <X size={14} />
-              </Button>
+              <p className="text-xs text-muted-foreground line-clamp-1 italic">
+                {quotedMessage.content || (quotedMessage.type === 'voice' ? '[语音消息]' : '[图片消息]')}
+              </p>
             </motion.div>
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {isMenuOpen && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="flex gap-4 p-4 bg-white dark:bg-[#1a1a1a] border border-border rounded-[24px] shadow-lg mb-2"
+        {/* Input Bar */}
+        <div className="flex items-end gap-2">
+          {/* Left: Plus Button */}
+          <div className="relative shrink-0">
+            <Button 
+              type="button"
+              onClick={() => {
+                if (hasContent) return;
+                setIsMenuOpen(!isMenuOpen);
+              }} 
+              size="icon"
+              variant="ghost"
+              className={cn(
+                "w-12 h-12 rounded-full transition-all duration-300 active:scale-95",
+                isMenuOpen ? "bg-primary/10 text-primary rotate-45" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
             >
-              <div className="flex flex-col items-center gap-2">
-                <Button 
-                  type="button"
-                  variant="ghost" 
-                  size="icon" 
-                  className="w-14 h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
-                  onPointerDown={handleCameraStart}
-                  onPointerUp={handleCameraEnd}
-                  onPointerLeave={handleCameraEnd}
-                  onClick={handleCameraClick}
-                  disabled={isRecording}
-                >
-                  <Camera size={24} />
-                </Button>
-                <span className="text-[10px] text-muted-foreground font-medium">拍照/相册</span>
-              </div>
-              <div className="flex flex-col items-center gap-2">
-                <Button 
-                  type="button"
-                  variant="ghost" 
-                  size="icon" 
-                  className="w-14 h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isRecording}
-                >
-                  <Plus size={24} />
-                </Button>
-                <span className="text-[10px] text-muted-foreground font-medium">选文件</span>
-                <input
-                    type="file"
-                    ref={fileInputRef}
-                    className="hidden"
-                    onChange={handleImageUpload}
-                    accept="image/*"
-                />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+              <Plus size={22} />
+            </Button>
 
-        <div className="flex items-center gap-3 bg-white dark:bg-[rgba(255,255,255,0.03)] border border-border rounded-[24px] p-2 h-20 shadow-sm dark:shadow-none">
-          {/* Main Input Area */}
-          <div className="relative flex-1 h-full flex items-center">
+            {/* Plus Menu */}
+            <AnimatePresence>
+              {isMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                  className="absolute bottom-full left-0 mb-2 p-4 bg-popover border border-border rounded-2xl shadow-xl min-w-[180px]"
+                >
+
+                  <button 
+                    type="button"
+                    className="w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-muted rounded-xl transition-colors active:scale-[0.98]"
+                    onClick={takePhoto}
+                  >
+                    <Camera size={18} className="text-primary" />
+                    <span>拍照</span>
+                  </button>
+                  <button 
+                    type="button"
+                    className="w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-muted rounded-xl transition-colors active:scale-[0.98]"
+                    onClick={pickImage}
+                  >
+                    <ImageIcon size={16} className="text-primary" />
+                    <span>相册</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+
+          {/* Center: Text Input */}
+          <div className="flex-1 relative">
             <Input
               id="chat-text-input"
               ref={inputRef}
               value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                if (e.target.value.trim() && isMenuOpen) {
-                  setIsMenuOpen(false);
-                }
-              }}
-              onFocus={() => {
-                if (isMenuOpen) setIsMenuOpen(false);
-              }}
+              onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -349,15 +291,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
                 }
               }}
               placeholder={isRecording ? "正在录音..." : "输入消息..."}
-              className="h-full border-none bg-transparent focus-visible:ring-0 text-[15px] placeholder:text-muted-foreground"
+              className="h-12 px-5 rounded-full bg-muted/50 border-border/30 focus-visible:ring-primary/20 text-[16px] pr-14"
             />
+            
+            {/* Mic Button - inside input on right */}
             <Button
               type="button"
               variant="ghost"
               size="icon"
               className={cn(
-                "w-11 h-11 rounded-full transition-all hover:bg-primary/10 hover:text-primary active:scale-95 bg-card border mr-1",
-                isRecording ? "text-primary border-primary/50" : "text-muted-foreground"
+                "absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full transition-all",
+                isRecording ? "text-primary" : "text-muted-foreground hover:text-foreground"
               )}
               onPointerDown={handleMicDown}
               onPointerUp={handleMicUp}
@@ -375,47 +319,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
             </Button>
           </div>
 
-          <Button 
-            type="button"
-            onClick={() => {
-              if (text.trim() || previewImage || audioUrl) {
-                handleSend();
-              } else {
-                setIsMenuOpen(!isMenuOpen);
-              }
-            }} 
-            size="icon"
-            className={cn(
-              "shrink-0 w-12 h-12 rounded-full transition-all duration-300 active:scale-95",
-              (text.trim() || previewImage || audioUrl)
-                ? "bg-primary text-primary-foreground shadow-[0_0_15px_rgba(0,210,255,0.4)]"
-                : "bg-muted text-muted-foreground hover:bg-primary/10 hover:text-primary shadow-none rotate-0"
+          {/* Right: Send Button */}
+          <AnimatePresence mode="wait">
+            {hasContent ? (
+              <motion.button
+                key="send"
+                initial={{ opacity: 0, scale: 0.5 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.5 }}
+                type="button"
+                onClick={handleSend}
+                className="shrink-0 w-12 h-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/30 hover:bg-primary/90 active:scale-90 transition-all"
+              >
+                <Send size={22} />
+              </motion.button>
+            ) : (
+              <div className="w-12 shrink-0" />
             )}
-          >
-            <AnimatePresence mode="wait">
-              {(text.trim() || previewImage || audioUrl) ? (
-                <motion.div
-                  key="send"
-                  initial={{ opacity: 0, scale: 0.5, rotate: -45 }}
-                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
-                  exit={{ opacity: 0, scale: 0.5, rotate: 45 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <Send size={20} />
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="plus"
-                  initial={{ opacity: 0, scale: 0.5, rotate: 45 }}
-                  animate={{ opacity: 1, scale: 1, rotate: isMenuOpen ? 45 : 0 }}
-                  exit={{ opacity: 0, scale: 0.5, rotate: -45 }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <Plus size={24} />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </Button>
+          </AnimatePresence>
         </div>
       </div>
     </div>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -11,7 +11,7 @@ import { Message, AppSettings } from '../../types';
 import { cn, formatMessageDate } from '../../lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { motion, AnimatePresence } from 'motion/react';
-import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2 } from 'lucide-react';
+import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Clipboard } from '@capacitor/clipboard';
 import { Toast } from '@capacitor/toast';
 
@@ -166,6 +166,48 @@ const QuoteDisplay: React.FC<{ quote: Message['quote']; onLocate?: (id: string) 
   );
 };
 
+const ReasoningDisplay: React.FC<{ content: string }> = ({ content }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  if (!content || !content.trim()) return null;
+  
+  const cleanContent = content.replace(/\[THINKING\]|<\/?thinking>/g, '').trim();
+  if (!cleanContent) return null;
+  
+  return (
+    <div className="mb-2 rounded-lg border border-border/40 overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-muted/50 transition-colors"
+      >
+        {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        <span>思考过程</span>
+        {!isExpanded && (
+          <span className="text-[10px] opacity-60 ml-auto">
+            {cleanContent.length} 字符
+          </span>
+        )}
+      </button>
+      
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="px-3 pb-3"
+          >
+            <div className="text-xs text-muted-foreground/70 leading-relaxed italic whitespace-pre-wrap font-sans">
+              {cleanContent}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 const HighlightedText: React.FC<{ text: string; query: string; isActive?: boolean }> = ({ text, query, isActive }) => {
   if (!query.trim()) return <>{text}</>;
   
@@ -312,6 +354,10 @@ const MessageItem: React.FC<{
           contextMenuId === message.id && "ring-2 ring-primary/30 scale-[0.99]"
         )}>
           <QuoteDisplay quote={message.quote} onLocate={scrollToMessage} />
+
+          {message.role === 'assistant' && message.reasoningContent && (
+            <ReasoningDisplay content={message.reasoningContent} />
+          )}
 
           {message.type === 'image' && message.mediaUrl && (
             <img 
@@ -688,10 +734,17 @@ export const MessageList: React.FC<MessageListProps> = ({
   return (
     <div 
       ref={scrollRef} 
-        className="flex-1 overflow-y-auto p-4 space-y-6 pb-24"
+
+        className="flex-1 overflow-y-auto p-4 space-y-6 pb-2 select-none"
+
         onTouchMove={handleTouchMove}
       >
-        {messages.map((message) => (
+        {messages.map((message, index) => {
+          const isLastMessage = index === messages.length - 1;
+          if (isLastMessage && isLoading && message.role === 'assistant' && !message.content) {
+            return null;
+          }
+          return (
           <MessageItem
             key={message.id}
             message={message}
@@ -713,7 +766,8 @@ export const MessageList: React.FC<MessageListProps> = ({
             messageRef={(el) => { messageRefs.current[message.id] = el; }}
             onRegisterReplay={(id, play) => { replayRefs.current[id] = play; }}
           />
-        ))}
+        );
+        })}
         
         {isLoading && (
         <motion.div

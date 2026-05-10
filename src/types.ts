@@ -13,6 +13,7 @@ export interface Message {
   type: 'text' | 'voice' | 'image';
   mediaUrl?: string;
   transcribedText?: string;
+  reasoningContent?: string;
   quote?: {
     id: string;
     userName: string;
@@ -49,3 +50,13 @@ export interface ChatState {
   error: string | null;
   settings: AppSettings;
 }
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type ReasoningType = 'thinking' | 'normal';
