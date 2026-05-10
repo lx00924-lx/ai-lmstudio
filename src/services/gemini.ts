@@ -20,6 +20,63 @@ function sanitizeEndpoint(endpoint: string): string {
   return sanitized;
 }
 
+const DEFAULT_SEARXNG_INSTANCES = [
+  'https://search.bus-hit.me',
+  'https://searx.be',
+  'https://search.sapti.me'
+];
+
+export async function searchWeb(query: string, searxngUrl?: string): Promise<string> {
+  const instances = searxngUrl ? [searxngUrl] : DEFAULT_SEARXNG_INSTANCES;
+  
+  for (const instance of instances) {
+    try {
+      const url = `${instance}/search?q=${encodeURIComponent(query)}&format=json&categories=general&language=en`;
+      console.log('Searching SearXNG:', url);
+      
+      let response: Response;
+      try {
+        response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      } catch (fetchErr) {
+        console.warn(`SearXNG instance ${instance} failed`, fetchErr);
+        continue;
+      }
+      
+      if (!response.ok) {
+        console.warn(`SearXNG returned status ${response.status}`);
+        continue;
+      }
+      
+      const data = await response.json();
+      const results = data.results || [];
+      
+      if (results.length === 0) {
+        continue;
+      }
+      
+      let searchResults = `## 联网搜索结果\n\n`;
+      for (let i = 0; i < Math.min(results.length, 5); i++) {
+        const r = results[i];
+        searchResults += `${i + 1}. **${r.title || '无标题'}**\n`;
+        if (r.content) {
+          searchResults += `   ${r.content.substring(0, 300)}\n\n`;
+        }
+        if (r.url) {
+          searchResults += `   🔗 [链接](${r.url})\n\n`;
+        }
+      }
+      
+      console.log('SearXNG search results:', searchResults);
+      return searchResults;
+    } catch (err) {
+      console.warn(`Search failed on ${instance}:`, err);
+      continue;
+    }
+  }
+  
+  return '';
+}
+
 export async function sendMessageToGemini(
   messages: Message[],
   settings: AppSettings,
@@ -80,7 +137,23 @@ export async function sendMessageToGemini(
       });
 
       const lastMessage = messages[messages.length - 1];
-      const userContent = mapMessageToCustomContent(lastMessage);
+      let userContent = mapMessageToCustomContent(lastMessage);
+
+      // Web search integration
+      if (settings.enableWebSearch && typeof userContent === 'string' && userContent.trim()) {
+        try {
+          onChunk?.('[正在联网搜索...]');
+          const searchResults = await searchWeb(userContent, settings.searxngUrl);
+          if (searchResults) {
+            userContent += `\n\n---\n## 参考搜索结果\n${searchResults}\n请基于以上搜索结果回答问题。`;
+            console.log('Appended web search results to prompt');
+          } else {
+            onChunk?.('[搜索未返回结果，直接回答...]');
+          }
+        } catch (err) {
+          console.error('Web search failed:', err);
+        }
+      }
 
       // Use CapacitorHttp for better compatibility and to bypass CORS on mobile
       // Try streaming first, fall back to non-streaming if not supported

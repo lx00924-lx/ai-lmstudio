@@ -42,6 +42,8 @@ export interface AppSettings {
   splashImage?: string;
   splashSubtitle?: string;
   splashDuration?: number;
+  enableWebSearch?: boolean;
+  searxngUrl?: string;
 }
 
 export interface ChatState {

@@ -400,11 +400,44 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="border-t pt-4 mt-2">
             <h4 className="text-xs font-semibold mb-3">GitHub 更新设置</h4>
             <div className="space-y-3">
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="systemInstruction" className="text-right text-xs">回复逻辑</Label>
+            <Input id="systemInstruction" name="systemInstruction" value={localSettings.systemInstruction || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：你是一个专业的程序员" />
+          </div>
+
+          <div className="border-t pt-4 mt-2">
+            <h4 className="text-xs font-semibold mb-3">联网搜索</h4>
+            <div className="space-y-3">
               <div className="grid grid-cols-4 items-center gap-4">
-                <Label htmlFor="githubOwner" className="text-right text-xs">用户名</Label>
-                <Input id="githubOwner" name="githubOwner" value={localSettings.githubOwner || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：lx00924" />
+                <Label htmlFor="enableWebSearch" className="text-right text-xs">启用搜索</Label>
+                <div className="col-span-3 flex items-center h-8">
+                  <input
+                    id="enableWebSearch"
+                    type="checkbox"
+                    checked={localSettings.enableWebSearch}
+                    onChange={(e) => setLocalSettings(prev => ({ ...prev, enableWebSearch: e.target.checked }))}
+                    className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+                  />
+                </div>
               </div>
-              <div className="grid grid-cols-4 items-center gap-4">
+              
+              {localSettings.enableWebSearch && (
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="searxngUrl" className="text-right text-xs">搜索实例</Label>
+                  <Input 
+                    id="searxngUrl" 
+                    name="searxngUrl" 
+                    value={localSettings.searxngUrl || ''} 
+                    onChange={(e) => setLocalSettings(prev => ({ ...prev, searxngUrl: e.target.value }))}
+                    className="col-span-3 h-8 text-xs" 
+                    placeholder="留空使用默认实例" 
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="githubRepo" className="text-right text-xs">仓库名</Label>
                 <Input id="githubRepo" name="githubRepo" value={localSettings.githubRepo || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：aether-x" />
               </div>
