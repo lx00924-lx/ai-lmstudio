@@ -137,6 +137,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     try {
       const image = await CapCamera.getPhoto({
         quality: 90,
+        width: 800,
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
         source: source

@@ -73,6 +73,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
       setIsMenuOpen(false);
       const image = await CapCamera.getPhoto({
         quality: 90,
+        width: 800,
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
         source: CameraSource.Camera
@@ -94,6 +95,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
       setIsMenuOpen(false);
       const image = await CapCamera.getPhoto({
         quality: 90,
+        width: 800,
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
         source: CameraSource.Photos
