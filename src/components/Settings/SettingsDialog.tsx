@@ -28,6 +28,7 @@ interface SettingsDialogProps {
   settings: AppSettings;
   onSave: (settings: AppSettings) => void;
   onCheckUpdate: () => Promise<{ success: boolean; data?: any; error?: string }>;
+  userId?: string;
 }
 
 export const SettingsDialog: React.FC<SettingsDialogProps> = ({
@@ -36,6 +37,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   settings,
   onSave,
   onCheckUpdate,
+  userId,
 }) => {
   const [localSettings, setLocalSettings] = React.useState<AppSettings>(settings);
   const [updateStatus, setUpdateStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
@@ -43,12 +45,20 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [isFetchingModels, setIsFetchingModels] = React.useState(false);
   const [modelFetchStatus, setModelFetchStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
   const [cropImage, setCropImage] = React.useState<{ src: string, field: keyof AppSettings } | null>(null);
+  const [passwordStatus, setPasswordStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
+  const [oldPassword, setOldPassword] = React.useState('');
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
 
   React.useEffect(() => {
     if (!open) {
       setUpdateStatus(null);
       setIsChecking(false);
       setModelFetchStatus(null);
+      setPasswordStatus(null);
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
     }
     setLocalSettings(settings);
   }, [settings, open]);
@@ -111,6 +121,37 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
       setModelFetchStatus({ type: 'error', message: `连接失败: ${error instanceof Error ? error.message : '请检查 API 地址及是否支持 CORS'}` });
     } finally {
       setIsFetchingModels(false);
+    }
+  };
+
+  const handlePasswordChange = async () => {
+    if (newPassword !== confirmPassword) {
+      setPasswordStatus({ type: 'error', message: '两次新密码不一致' });
+      return;
+    }
+    if (!oldPassword || !newPassword) {
+      setPasswordStatus({ type: 'error', message: '请填写所有密码字段' });
+      return;
+    }
+    
+    try {
+      const baseUrl = import.meta.env.VITE_SERVER_BASE_URL || '';
+      const response = await fetch(`${baseUrl}/api/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, oldPassword, newPassword })
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setPasswordStatus({ type: 'success', message: '密码修改成功' });
+        setOldPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        setPasswordStatus({ type: 'error', message: data.error || '修改失败' });
+      }
+    } catch (e) {
+      setPasswordStatus({ type: 'error', message: '连接错误' });
     }
   };
 
@@ -212,13 +253,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent 
-        className="sm:max-w-[425px] bg-white dark:bg-card border-border text-foreground max-h-[90vh] overflow-y-auto"
+        className="sm:max-w-[425px] bg-white dark:bg-black border-border text-foreground max-h-[90vh] overflow-y-auto"
       >
         <DialogHeader>
           <div className="flex items-center justify-between">
             <DialogTitle>应用设置</DialogTitle>
             <span className="text-[10px] font-mono text-muted-foreground mr-6">
-              {localStorage.getItem('app_version') || 'v0.0.5'}
+              {localStorage.getItem('app_version') || 'v0.0.6'}
             </span>
           </div>
         </DialogHeader>
@@ -311,8 +352,16 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               step="0.1"
               min="0"
               max="1"
-              value={localSettings.backgroundOpacity ?? 0.2} 
-              onChange={(e) => setLocalSettings(prev => ({ ...prev, backgroundOpacity: parseFloat(e.target.value) || 0 }))} 
+              value={localSettings.backgroundOpacity == null ? '' : localSettings.backgroundOpacity} 
+              onChange={(e) => {
+                const val = e.target.value;
+                setLocalSettings(prev => ({ ...prev, backgroundOpacity: val === '' ? undefined : parseFloat(val) }));
+              }}
+              onBlur={(e) => {
+                if (localSettings.backgroundOpacity == null) {
+                  setLocalSettings(prev => ({ ...prev, backgroundOpacity: 0 }));
+                }
+              }}
               className="col-span-3 h-8 text-xs" 
             />
           </div>
@@ -396,6 +445,42 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="systemInstruction" className="text-right text-xs">回复逻辑</Label>
             <Input id="systemInstruction" name="systemInstruction" value={localSettings.systemInstruction || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：你是一个专业的程序员" />
+          </div>
+
+          <div className="border-t pt-4 mt-2">
+            <h4 className="text-xs font-semibold mb-3">修改密码</h4>
+            <div className="space-y-3">
+              <Input type="password" placeholder="原密码" value={oldPassword} onChange={(e) => setOldPassword(e.target.value)} className="h-8 text-xs" />
+              <Input type="password" placeholder="新密码" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="h-8 text-xs" />
+              <Input type="password" placeholder="确认新密码" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="h-8 text-xs" />
+              
+              <AnimatePresence>
+                {passwordStatus && (
+                  <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className={cn(
+                      "text-[10px] p-2 rounded-lg border",
+                      passwordStatus.type === 'error' ? "bg-destructive/10 border-destructive/20 text-destructive" : "bg-primary/10 border-primary/20 text-primary"
+                    )}
+                  >
+                    {passwordStatus.message}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              
+              <div className="flex justify-end pr-0.5">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="h-8 text-xs px-3 transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                  onClick={handlePasswordChange}
+                >
+                  确认修改
+                </Button>
+              </div>
+            </div>
           </div>
 
           <div className="border-t pt-4 mt-2">

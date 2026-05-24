@@ -51,11 +51,31 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     }
   }, [audioUrl, onSendMessage, setAudioUrl]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (text.trim() || previewImage) {
       if (previewImage) {
-        onSendMessage(text, 'image', previewImage);
-        setPreviewImage(null);
+        // If previewImage is a large base64, we should upload it as a file
+        try {
+          let imageUrl = previewImage;
+          if (previewImage.startsWith('data:')) {
+            const formData = new FormData();
+            const blob = await (await fetch(previewImage)).blob();
+            formData.append('image', blob, 'upload.jpg');
+            
+            const res = await fetch('/api/upload', {
+              method: 'POST',
+              body: formData
+            });
+            const data = await res.json();
+            imageUrl = data.url;
+          }
+          
+          onSendMessage(text, 'image', imageUrl);
+          setPreviewImage(null);
+        } catch (error) {
+          console.error("Upload failed:", error);
+          await Toast.show({ text: '图片发送失败，请重试' });
+        }
       } else {
         onSendMessage(text, 'text');
       }
@@ -72,8 +92,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     try {
       setIsMenuOpen(false);
       const image = await CapCamera.getPhoto({
-        quality: 90,
-        width: 800,
+        quality: 100, // Highest quality 
+        // No width/height to keep original 4K+ size
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
         source: CameraSource.Camera
@@ -94,8 +114,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
     try {
       setIsMenuOpen(false);
       const image = await CapCamera.getPhoto({
-        quality: 90,
-        width: 800,
+        quality: 100,
+        // No width limit for 4K
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
         source: CameraSource.Photos
@@ -286,7 +306,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="flex gap-4 p-4 bg-white dark:bg-[#1a1a1a] border border-border rounded-[24px] shadow-lg mb-2"
+              className="flex gap-4 p-4 bg-white dark:bg-black border border-border rounded-[24px] shadow-lg mb-2"
             >
               <div className="flex flex-col items-center gap-2">
                 <Button 
@@ -328,7 +348,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
           )}
         </AnimatePresence>
 
-        <div className="flex items-center gap-3 bg-white dark:bg-[rgba(255,255,255,0.03)] border border-border rounded-[24px] p-2 h-20 shadow-sm dark:shadow-none">
+        <div className="flex items-center gap-3 bg-white dark:bg-black border border-border rounded-[24px] p-2 h-20 shadow-sm dark:shadow-none">
           {/* Main Input Area */}
           <div className="relative flex-1 h-full flex items-center">
             <Input

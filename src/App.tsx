@@ -14,9 +14,11 @@ import { ChatInput } from './components/Chat/ChatInput';
 import { SettingsDialog } from './components/Settings/SettingsDialog';
 import { DeleteHistoryDialog } from './components/Chat/DeleteHistoryDialog';
 import { UpdateDialog } from './components/Chat/UpdateDialog';
+import { AuthScreen } from './components/Auth/AuthScreen';
 import { Message, ChatState, AppSettings } from './types';
 import { sendMessageToGemini } from './services/gemini';
-import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff } from 'lucide-react';
+import socket from './lib/socket';
+import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from './components/ui/input';
 import { motion, AnimatePresence } from 'motion/react';
@@ -87,35 +89,93 @@ export default function App() {
   const [hideNonMatches, setHideNonMatches] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [user, setUser] = useState<{ id: string; username: string } | null>(() => {
+    const saved = localStorage.getItem('app_user');
+    return saved ? JSON.parse(saved) : null;
+  });
 
   const [state, setState] = useState<ChatState>(() => {
-    let settings = DEFAULT_SETTINGS;
-    let messages: Message[] = [];
-    
-    try {
-      const savedSettings = localStorage.getItem('gemini_settings');
-      if (savedSettings) {
-        settings = { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) };
-      }
-      
-      const savedMessages = localStorage.getItem('chat_history');
-      if (savedMessages) {
-        messages = JSON.parse(savedMessages).map((m: any) => ({
-          ...m,
-          timestamp: new Date(m.timestamp)
-        }));
-      }
-    } catch (error) {
-      console.error('Failed to parse saved data', error);
-    }
-    
     return {
-      messages,
+      messages: [],
       isLoading: false,
       error: null,
-      settings
+      settings: DEFAULT_SETTINGS
     };
   });
+
+  // Handle Login
+  const handleLogin = (userData: { id: string; username: string }) => {
+    setUser(userData);
+    localStorage.setItem('app_user', JSON.stringify(userData));
+    socket.emit("join_user_room", userData.id);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('app_user');
+    setState(prev => ({ ...prev, messages: [], settings: DEFAULT_SETTINGS }));
+  };
+
+  // Fetch messages AND settings from server when user is logged in
+  useEffect(() => {
+    if (!user) return;
+
+    const initData = async () => {
+      try {
+        // Join room immediately on re-mount or login
+        socket.emit("join_user_room", user.id);
+
+        const [msgRes, settingsRes] = await Promise.all([
+          fetch(`/api/messages/${user.id}`),
+          fetch(`/api/settings/${user.id}`)
+        ]);
+
+        if (!msgRes.ok) throw new Error("Failed to fetch messages");
+        const messages = await msgRes.json();
+        const serverSettings = await settingsRes.json();
+
+        setState(prev => ({
+          ...prev,
+          settings: Object.keys(serverSettings).length > 0 ? { ...DEFAULT_SETTINGS, ...serverSettings } : prev.settings,
+          messages: Array.isArray(messages) ? messages.map((m: any) => ({
+            ...m,
+            timestamp: new Date(m.timestamp)
+          })) : []
+        }));
+      } catch (err) {
+        console.error("Failed to fetch initial data:", err);
+      }
+    };
+
+    initData();
+
+    socket.on("receive_message", (message: Message) => {
+      setState(prev => {
+        if (prev.messages.find(m => m.id === message.id)) return prev;
+        return {
+          ...prev,
+          messages: [...prev.messages, { ...message, timestamp: new Date(message.timestamp) }]
+        };
+      });
+    });
+
+    socket.on("message_deleted", (messageId: string) => {
+      setState(prev => ({
+        ...prev,
+        messages: prev.messages.filter(m => m.id !== messageId)
+      }));
+    });
+
+    socket.on("settings_updated", (newSettings: AppSettings) => {
+      setState(prev => ({ ...prev, settings: newSettings }));
+    });
+
+    return () => {
+      socket.off("receive_message");
+      socket.off("message_deleted");
+      socket.off("settings_updated");
+    };
+  }, [user]);
 
   const [quotedMessage, setQuotedMessage] = useState<Message | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(initialTheme);
@@ -236,7 +296,7 @@ export default function App() {
 
 
   useEffect(() => {
-    safeSaveToLocalStorage('chat_history', state.messages);
+    // Message saving to localStorage is removed since we use server sync
   }, [state.messages]);
 
   useEffect(() => {
@@ -280,6 +340,9 @@ export default function App() {
 
   const handleSaveSettings = (newSettings: AppSettings) => {
     setState(prev => ({ ...prev, settings: newSettings }));
+    if (user) {
+      socket.emit("update_settings", { userId: user.id, settings: newSettings });
+    }
     setIsSidebarOpen(false);
   };
 
@@ -346,6 +409,9 @@ export default function App() {
       ...prev,
       messages: prev.messages.filter(m => m.id !== id)
     }));
+    if (user) {
+      socket.emit("delete_message", { userId: user.id, messageId: id });
+    }
   };
 
   const handleCopySelected = async () => {
@@ -518,17 +584,18 @@ export default function App() {
 
   const runGeminiQuery = useCallback(async (allMessagesSoFar: Message[]) => {
     const assistantMessageId = crypto.randomUUID();
-    
-    // Append Assistant placeholder to PREVIOUS messages (state.messages already includes the previous user message and its response)
+    const assistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: "",
+      timestamp: new Date(),
+      type: 'text'
+    };
+
+    // 1. Add Assistant placeholder
     setState(prev => ({
       ...prev,
-      messages: [...prev.messages, {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: "",
-        timestamp: new Date(),
-        type: 'text'
-      }],
+      messages: [...prev.messages, assistantMessage],
       isLoading: true,
       error: null
     }));
@@ -547,6 +614,13 @@ export default function App() {
           )
         }));
       });
+      
+      // 3. Emit final message to socket to save on server
+      const finalMessage = { ...assistantMessage, content: assistantMessageContent, timestamp: new Date() };
+      if (user) {
+        socket.emit("send_message", { userId: user.id, message: finalMessage });
+      }
+      
     } catch (error) {
       setState(prev => ({
         ...prev,
@@ -591,11 +665,16 @@ export default function App() {
       return;
     }
 
-    // Add user message to state
+    // Add user message to state locally
     setState(prev => ({
       ...prev,
       messages: [...prev.messages, userMessage]
     }));
+
+    // Emit to socket to sync and save
+    if (user) {
+      socket.emit("send_message", { userId: user.id, message: userMessage });
+    }
 
     if (state.isLoading) {
       queueRef.current.push(userMessage);
@@ -763,6 +842,9 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden relative">
+      <AnimatePresence>
+        {!user && <AuthScreen key="auth" onLogin={handleLogin} />}
+      </AnimatePresence>
       <AnimatePresence mode="wait">
         {showSplash && state.settings.showSplashScreen && <SplashScreen key="splash" />}
       </AnimatePresence>
@@ -788,7 +870,7 @@ export default function App() {
             animate={{ x: 0 }}
             exit={{ x: -160 }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed inset-y-0 left-0 w-40 border-r bg-sidebar flex flex-col items-start py-8 px-4 gap-6 shrink-0 z-50 shadow-2xl"
+            className="fixed inset-y-0 left-0 w-40 border-r bg-sidebar dark:bg-black flex flex-col items-start py-8 px-4 gap-6 shrink-0 z-50 shadow-2xl"
           >
             <div className="flex flex-col gap-2 w-full">
               <Button 
@@ -849,6 +931,14 @@ export default function App() {
               >
                 <Settings size={20} />
                 <span>设置</span>
+              </Button>
+              <Button 
+                variant="ghost" 
+                className="w-32 justify-start gap-3 rounded-full bg-destructive/10 border border-destructive/20 text-destructive transition-all hover:bg-destructive hover:text-destructive-foreground active:scale-95 pl-3"
+                onClick={handleLogout}
+              >
+                <LogOut size={20} />
+                <span>退出登录</span>
               </Button>
             </div>
           </motion.aside>
@@ -1120,6 +1210,7 @@ export default function App() {
         settings={state.settings} 
         onSave={handleSaveSettings} 
         onCheckUpdate={handleCheckUpdate}
+        userId={user?.id}
       />
 
       <DeleteHistoryDialog

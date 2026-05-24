@@ -314,16 +314,23 @@ const MessageItem: React.FC<{
           <QuoteDisplay quote={message.quote} onLocate={scrollToMessage} />
 
           {message.type === 'image' && message.mediaUrl && (
-            <img 
-              src={message.mediaUrl} 
-              alt="Uploaded" 
-              className="rounded-lg mb-2 max-w-full h-auto"
-              referrerPolicy="no-referrer"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-                console.error("Image render error");
-              }}
-            />
+            <div className="relative group/image overflow-hidden rounded-lg mb-2 bg-muted/20">
+              <img 
+                src={message.mediaUrl} 
+                alt="Uploaded" 
+                className="rounded-lg max-w-full h-auto cursor-zoom-in transition-transform group-hover/image:scale-[1.01] active:scale-95"
+                referrerPolicy="no-referrer"
+                loading="lazy"
+                onClick={() => window.open(message.mediaUrl, '_blank')}
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                  console.error("Image render error");
+                }}
+              />
+              <div className="absolute bottom-2 right-2 opacity-0 group-hover/image:opacity-100 transition-opacity bg-black/50 backdrop-blur-md text-[10px] text-white px-2 py-1 rounded-md pointer-events-none">
+                查看原图 (4K+)
+              </div>
+            </div>
           )}
           
           {message.type === 'voice' && message.mediaUrl && (

@@ -28,6 +28,7 @@ export async function sendMessageToGemini(
   try {
     if (settings.apiEndpoint) {
       const sanitizedEndpoint = sanitizeEndpoint(settings.apiEndpoint);
+      // Use CapacitorHttp for better compatibility and to bypass CORS on mobile
       const url = `${sanitizedEndpoint}/chat/completions`;
       console.log("Attempting to connect to API endpoint:", url);
       

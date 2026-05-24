@@ -27,7 +27,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="flex h-screen items-center justify-center p-4 text-center">
             <div className='flex flex-col gap-4'>
                 <h1 className='text-xl'>应用出错</h1>
-                <p>请刷新页面重试。</p>
+                <p>请刷新重试。</p>
             </div>
         </div>
       );
