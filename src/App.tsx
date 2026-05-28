@@ -18,6 +18,7 @@ import { AuthScreen } from './components/Auth/AuthScreen';
 import { Message, ChatState, AppSettings } from './types';
 import { sendMessageToGemini } from './services/gemini';
 import socket from './lib/socket';
+import { API_BASE_URL } from './config';
 import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from './components/ui/input';
@@ -95,25 +96,63 @@ export default function App() {
   });
 
   const [state, setState] = useState<ChatState>(() => {
+    const savedGuest = localStorage.getItem('guest_messages');
+    const messages = savedGuest ? JSON.parse(savedGuest).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })) : [];
+    
+    // Load saved settings if they exist
+    const savedSettings = localStorage.getItem('gemini_settings');
+    const settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS;
+
     return {
-      messages: [],
+      messages,
       isLoading: false,
       error: null,
-      settings: DEFAULT_SETTINGS
+      settings
     };
   });
 
   // Handle Login
-  const handleLogin = (userData: { id: string; username: string }) => {
+  const handleLogin = async (userData: { id: string; username: string }) => {
     setUser(userData);
     localStorage.setItem('app_user', JSON.stringify(userData));
     socket.emit("join_user_room", userData.id);
+
+    // Sync guest messages if they exist
+    const guestMessages = localStorage.getItem('guest_messages');
+    if (guestMessages && userData.id !== 'guest') {
+      try {
+        const messagesToSync = JSON.parse(guestMessages);
+        await fetch(`${API_BASE_URL}/api/sync-messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: userData.id, messages: messagesToSync })
+        });
+        localStorage.removeItem('guest_messages');
+        console.log('Guest messages synced.');
+      } catch (err) {
+        console.error('Failed to sync guest messages:', err);
+      }
+    }
+
+    // Sync guest settings if they exist
+    const guestSettings = localStorage.getItem('gemini_settings');
+    if (guestSettings && userData.id !== 'guest') {
+      try {
+        const settingsToSync = JSON.parse(guestSettings);
+        socket.emit("update_settings", { userId: userData.id, settings: settingsToSync });
+        
+        console.log('Guest settings synced.');
+      } catch (err) {
+        console.error('Failed to sync guest settings:', err);
+      }
+    }
   };
 
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('app_user');
     setState(prev => ({ ...prev, messages: [], settings: DEFAULT_SETTINGS }));
+    setIsSidebarOpen(false);
   };
 
   // Fetch messages AND settings from server when user is logged in
@@ -125,14 +164,14 @@ export default function App() {
         // Join room immediately on re-mount or login
         socket.emit("join_user_room", user.id);
 
-        const [msgRes, settingsRes] = await Promise.all([
-          fetch(`/api/messages/${user.id}`),
-          fetch(`/api/settings/${user.id}`)
+        // Fetch messages and settings individually
+        const [msgRes, settingsRes] = await Promise.allSettled([
+          fetch(`${API_BASE_URL}/api/messages/${user.id}`).then(r => r.ok ? r.json() : Promise.reject('Failed to fetch messages')),
+          fetch(`${API_BASE_URL}/api/settings/${user.id}`).then(r => r.ok ? r.json() : Promise.reject('Failed to fetch settings'))
         ]);
 
-        if (!msgRes.ok) throw new Error("Failed to fetch messages");
-        const messages = await msgRes.json();
-        const serverSettings = await settingsRes.json();
+        const messages = msgRes.status === 'fulfilled' ? msgRes.value : [];
+        const serverSettings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
 
         setState(prev => ({
           ...prev,
@@ -617,7 +656,11 @@ export default function App() {
       
       // 3. Emit final message to socket to save on server
       const finalMessage = { ...assistantMessage, content: assistantMessageContent, timestamp: new Date() };
-      if (user) {
+      
+      if (user?.id === 'guest') {
+        const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
+        localStorage.setItem('guest_messages', JSON.stringify([...existing, finalMessage]));
+      } else if (user) {
         socket.emit("send_message", { userId: user.id, message: finalMessage });
       }
       
@@ -671,8 +714,13 @@ export default function App() {
       messages: [...prev.messages, userMessage]
     }));
 
+    if (user?.id === 'guest') {
+      const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
+      localStorage.setItem('guest_messages', JSON.stringify([...existing, userMessage]));
+    }
+
     // Emit to socket to sync and save
-    if (user) {
+    if (user && user.id !== 'guest') {
       socket.emit("send_message", { userId: user.id, message: userMessage });
     }
 

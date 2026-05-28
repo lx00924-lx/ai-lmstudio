@@ -1,6 +1,6 @@
 import { io } from "socket.io-client";
+import { API_BASE_URL } from "../config";
 
-// In AI Studio, the dev server and production app run on the same origin (port 3000)
-const socket = io();
+const socket = io(API_BASE_URL);
 
 export default socket;

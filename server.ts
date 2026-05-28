@@ -5,6 +5,7 @@ import path from "path";
 import fs from "fs/promises";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
+import cors from "cors";
 
 const PORT = 3000;
 const MESSAGES_FILE = path.join(process.cwd(), "messages_data", "messages_v2.json"); // Use v2 to avoid conflicts
@@ -20,7 +21,8 @@ async function ensureDirs() {
     
     const checkFile = async (filePath: string, defaultContent: any) => {
       try {
-        await fs.access(filePath);
+        const stats = await fs.stat(filePath);
+        if (stats.size === 0) throw new Error("File empty");
       } catch {
         await fs.writeFile(filePath, JSON.stringify(defaultContent));
       }
@@ -53,6 +55,7 @@ async function startServer() {
   await ensureDirs();
 
   const app = express();
+  app.use(cors());
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: { origin: "*" },
@@ -65,28 +68,56 @@ async function startServer() {
   // User Auth API
   app.post("/api/register", async (req, res) => {
     const { username, password } = req.body;
+    console.log(`Registration attempt for username: ${username}`);
     try {
       const users = JSON.parse(await fs.readFile(USERS_FILE, "utf-8"));
       if (users.find((u: any) => u.username === username)) {
+        console.log(`Registration failed: user already exists: ${username}`);
         return res.status(400).json({ error: "User already exists" });
       }
       const newUser = { id: Date.now().toString(), username, password };
       users.push(newUser);
       await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+      console.log(`Registration successful for username: ${username}`);
       res.json({ user: { id: newUser.id, username: newUser.username } });
     } catch (e) {
+      console.error(`Registration error for ${username}:`, e);
       res.status(500).json({ error: "Registration failed" });
     }
   });
 
   app.post("/api/login", async (req, res) => {
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({ error: "Invalid request body" });
+    }
     const { username, password } = req.body;
+    console.log(`Login attempt for username: ${username}`);
     try {
-      const users = JSON.parse(await fs.readFile(USERS_FILE, "utf-8"));
-      const user = users.find((u: any) => u.username === username && u.password === password);
-      if (!user) return res.status(401).json({ error: "Invalid credentials" });
+      const usersContent = await fs.readFile(USERS_FILE, "utf-8");
+      let users = [];
+      try {
+        users = usersContent.trim() ? JSON.parse(usersContent) : [];
+      } catch (e) {
+        console.error("Error parsing users file:", e);
+        return res.status(500).json({ error: "Internal server error: User data corruption" });
+      }
+      
+      const user = users.find((u: any) => u.username === username);
+      
+      if (!user) {
+        console.log(`Login failed for username: ${username}. User not found.`);
+        return res.status(401).json({ error: "账号不存在" });
+      }
+      
+      if (user.password !== password) {
+        console.log(`Login failed for username: ${username}. Incorrect password.`);
+        return res.status(401).json({ error: "密码错误" });
+      }
+
+      console.log(`Login successful for username: ${username}`);
       res.json({ user: { id: user.id, username: user.username } });
     } catch (e) {
+      console.error(`Login error for ${username}:`, e);
       res.status(500).json({ error: "Login failed" });
     }
   });
@@ -98,6 +129,23 @@ async function startServer() {
       res.json(allMessages[req.params.userId] || []);
     } catch (error) {
       res.status(500).json({ error: "Failed to load messages" });
+    }
+  });
+
+  app.post("/api/sync-messages", async (req, res) => {
+    const { userId, messages } = req.body;
+    try {
+      const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
+      if (!allMessages[userId]) allMessages[userId] = [];
+      // Combine existing with synced, avoiding duplicates based on ID
+      const newMessages = [...allMessages[userId], ...messages];
+      const uniqueMessages = Array.from(new Map(newMessages.map(m => [m.id, m])).values());
+      allMessages[userId] = uniqueMessages;
+      await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Sync messages error:", error);
+      res.status(500).json({ error: "Failed to sync messages" });
     }
   });
 
@@ -144,12 +192,14 @@ async function startServer() {
 
     socket.on("send_message", async ({ userId, message }) => {
       try {
-        const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
-        if (!allMessages[userId]) allMessages[userId] = [];
-        allMessages[userId].push(message);
-        await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
+        if (userId !== "guest") { // Only store for non-guests
+          const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
+          if (!allMessages[userId]) allMessages[userId] = [];
+          allMessages[userId].push(message);
+          await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
+        }
         
-        // Broadcast only to this user's devices
+        // Still broadcast for real-time
         io.to(`user_${userId}`).emit("receive_message", message);
       } catch (error) {
         console.error("Socket error saving message:", error);

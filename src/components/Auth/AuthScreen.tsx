@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { motion } from 'motion/react';
 import { Sparkles, User, Lock, Loader2, ArrowRight } from 'lucide-react';
 import { Toast } from '@capacitor/toast';
+import { API_BASE_URL } from '../../config';
 
 interface AuthScreenProps {
   onLogin: (user: { id: string; username: string }) => void;
@@ -14,15 +15,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSkip = () => {
+    onLogin({ id: 'guest', username: '游客' });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username || !password) return;
 
     setIsLoading(true);
+    setError(null);
     try {
-      const baseUrl = import.meta.env.VITE_SERVER_BASE_URL || '';
+      const baseUrl = API_BASE_URL;
       const endpoint = isRegister ? '/api/register' : '/api/login';
+      console.log(`Sending request to ${baseUrl}${endpoint}`);
       const res = await fetch(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -30,14 +38,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
       });
 
       const data = await res.json();
+      console.log('Response data:', data);
       if (res.ok) {
-        await Toast.show({ text: isRegister ? '注册成功' : '登录成功' });
+        try { await Toast.show({ text: isRegister ? '注册成功' : '登录成功' }); } catch (e) { console.warn('Toast failed', e); }
         onLogin(data.user);
       } else {
-        await Toast.show({ text: data.error || '操作失败' });
+        setError(data.error || '操作失败');
+        try { await Toast.show({ text: data.error || '操作失败' }); } catch (e) { console.warn('Toast failed', e); }
       }
     } catch (err) {
-      await Toast.show({ text: '网络连接失败，请检查服务器' });
+      console.error('Fetch error:', err);
+      setError('网络连接失败，请检查服务器');
+      try { await Toast.show({ text: '网络连接失败，请检查服务器' }); } catch (e) { console.warn('Toast failed', e); }
     } finally {
       setIsLoading(false);
     }
@@ -69,6 +81,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
           </div>
 
           <form onSubmit={handleSubmit} className="w-full space-y-4 pt-2">
+            {error && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl text-sm text-center">
+                {error}
+              </div>
+            )}
             <div className="relative group">
               <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground group-focus-within:text-primary transition-colors" />
               <Input
@@ -105,6 +122,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
                   <ArrowRight size={18} className="ml-2" />
                 </>
               )}
+            </Button>
+            <Button 
+              type="button"
+              onClick={handleSkip}
+              className="w-full h-12 rounded-2xl text-base font-semibold transition-all active:scale-95 shadow-lg shadow-primary/30"
+              disabled={isLoading}
+            >
+              游客模式
             </Button>
           </form>
 

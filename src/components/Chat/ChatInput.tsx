@@ -12,6 +12,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatMessageDate } from '../../lib/utils';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Toast } from '@capacitor/toast';
+import { API_BASE_URL } from '../../config';
 
 interface ChatInputProps {
   onSendMessage: (text: string, type: 'text' | 'voice' | 'image', mediaUrl?: string) => void;
@@ -62,7 +63,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
             const blob = await (await fetch(previewImage)).blob();
             formData.append('image', blob, 'upload.jpg');
             
-            const res = await fetch('/api/upload', {
+            const res = await fetch(`${API_BASE_URL}/api/upload`, {
               method: 'POST',
               body: formData
             });

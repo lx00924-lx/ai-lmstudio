@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AppSettings } from '../../types';
+import { API_BASE_URL } from '../../config';
 import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2 } from 'lucide-react';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { CapacitorHttp } from '@capacitor/core';
@@ -135,7 +136,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }
     
     try {
-      const baseUrl = import.meta.env.VITE_SERVER_BASE_URL || '';
+      const baseUrl = API_BASE_URL;
       const response = await fetch(`${baseUrl}/api/change-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -259,7 +260,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="flex items-center justify-between">
             <DialogTitle>应用设置</DialogTitle>
             <span className="text-[10px] font-mono text-muted-foreground mr-6">
-              {localStorage.getItem('app_version') || 'v0.0.6'}
+              {localStorage.getItem('app_version') || 'v0.0.7'}
             </span>
           </div>
         </DialogHeader>
