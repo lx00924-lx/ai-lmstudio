@@ -6,6 +6,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { Message, AppSettings } from "../types";
 import { CapacitorHttp } from '@capacitor/core';
+import { estimateTokens } from "../lib/utils";
 
 // Helper to sanitize API endpoint
 function sanitizeEndpoint(endpoint: string): string {
@@ -70,7 +71,18 @@ export async function sendMessageToGemini(
         return parts.length === 1 && parts[0].type === 'text' ? parts[0].text : parts;
       };
 
-      const history = messages.slice(0, -1).map(msg => {
+      const MAX_TOKENS = settings.contextLength || 30000;
+      let currentTokens = 0;
+      const recentHistory: Message[] = [];
+      const historyMessages = messages.slice(0, -1).reverse();
+      for (const msg of historyMessages) {
+        const msgTokens = estimateTokens(msg.content || "");
+        if (currentTokens + msgTokens > MAX_TOKENS) break;
+        currentTokens += msgTokens;
+        recentHistory.unshift(msg);
+      }
+
+      const history = recentHistory.map(msg => {
         const customContent = mapMessageToCustomContent(msg);
         return {
           role: msg.role === 'assistant' ? 'assistant' : 'user',
@@ -178,7 +190,18 @@ export async function sendMessageToGemini(
       return msgParts;
     };
 
-    const history = messages.slice(0, -1).map(msg => ({
+    const MAX_TOKENS = settings.contextLength || 30000;
+    let currentTokens = 0;
+    const recentHistory: Message[] = [];
+    const historyMessages = messages.slice(0, -1).reverse();
+    for (const msg of historyMessages) {
+      const msgTokens = estimateTokens(msg.content || "");
+      if (currentTokens + msgTokens > MAX_TOKENS) break;
+      currentTokens += msgTokens;
+      recentHistory.unshift(msg);
+    }
+
+    const history = recentHistory.map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: mapMessageToParts(msg),
     }));

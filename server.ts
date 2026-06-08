@@ -175,6 +175,36 @@ async function startServer() {
     }
   });
 
+  app.post("/api/upload-chunk", upload.single("chunk"), async (req, res) => {
+    try {
+      const { filename, chunkIndex, totalChunks } = req.body;
+      const chunkDir = path.join(UPLOADS_DIR, `temp_${filename}`);
+      await fs.mkdir(chunkDir, { recursive: true });
+      await fs.rename(req.file!.path, path.join(chunkDir, chunkIndex));
+      
+      const files = await fs.readdir(chunkDir);
+      if (files.length === parseInt(totalChunks)) {
+        // Assemble
+        const finalPath = path.join(UPLOADS_DIR, filename);
+        const writeStream = require('fs').createWriteStream(finalPath);
+        for (let i = 0; i < files.length; i++) {
+          const chunkPath = path.join(chunkDir, i.toString());
+          const chunkData = await fs.readFile(chunkPath);
+          writeStream.write(chunkData);
+          await fs.unlink(chunkPath);
+        }
+        writeStream.end();
+        await fs.rmdir(chunkDir);
+        res.json({ url: `/uploads/${filename}`, completed: true });
+      } else {
+        res.json({ completed: false });
+      }
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "Chunk upload failed" });
+    }
+  });
+  
   app.post("/api/upload", upload.single("image"), (req, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     res.json({ url: `/uploads/${req.file.filename}` });
@@ -216,6 +246,43 @@ async function startServer() {
         io.to(`user_${userId}`).emit("message_deleted", messageId);
       } catch (error) {
         console.error("Socket error deleting message:", error);
+      }
+    });
+
+    socket.on("delete_messages_range", async ({ userId, range }) => {
+      console.log(`[Socket] Received delete_messages_range for userId: ${userId}, range: ${range}`);
+      try {
+        const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
+        if (!allMessages[userId]) {
+          console.log(`[Socket] No messages found for user: ${userId}`);
+          return;
+        }
+
+        // Logic for filtering
+        let messages = allMessages[userId];
+        const firstMessage = messages[0];
+        
+        if (range === 'all') {
+          console.log(`[Socket] Deleting all messages for user: ${userId}`);
+          allMessages[userId] = firstMessage?.role === 'assistant' ? [firstMessage] : [];
+        } else {
+          const days = range as number;
+          console.log(`[Socket] Deleting messages older than ${days} days for user: ${userId}`);
+          const cutoff = new Date();
+          cutoff.setDate(cutoff.getDate() - days);
+          cutoff.setHours(0, 0, 0, 0);
+          
+          allMessages[userId] = messages.filter((m: any, index: number) => {
+            if (index === 0 && m.role === 'assistant') return true;
+            return new Date(m.timestamp) >= cutoff; // Keeps messages within the range
+          });
+        }
+        
+        await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
+        console.log(`[Socket] Messages updated for user: ${userId}`);
+        io.to(`user_${userId}`).emit("messages_updated", allMessages[userId]);
+      } catch (error) {
+        console.error("Socket error deleting messages range:", error);
       }
     });
 

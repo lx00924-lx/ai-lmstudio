@@ -30,6 +30,7 @@ interface SettingsDialogProps {
   onSave: (settings: AppSettings) => void;
   onCheckUpdate: () => Promise<{ success: boolean; data?: any; error?: string }>;
   userId?: string;
+  username?: string;
 }
 
 export const SettingsDialog: React.FC<SettingsDialogProps> = ({
@@ -39,6 +40,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   onSave,
   onCheckUpdate,
   userId,
+  username,
 }) => {
   const [localSettings, setLocalSettings] = React.useState<AppSettings>(settings);
   const [updateStatus, setUpdateStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
@@ -266,6 +268,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid grid-cols-4 items-center gap-4">
+            <Label className="text-right text-xs">登录账号</Label>
+            <span className="col-span-3 text-xs text-muted-foreground">
+              {username ? username : '游客'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="userName" className="text-right text-xs">用户名</Label>
             <Input id="userName" name="userName" value={localSettings.userName} onChange={handleChange} className="col-span-3 h-8 text-xs" />
           </div>
@@ -446,6 +455,27 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="systemInstruction" className="text-right text-xs">回复逻辑</Label>
             <Input id="systemInstruction" name="systemInstruction" value={localSettings.systemInstruction || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：你是一个专业的程序员" />
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="contextLength" className="text-right text-xs">上下文长度</Label>
+            <Input 
+              id="contextLength" 
+              name="contextLength" 
+              type="number"
+              value={localSettings.contextLength == null ? '' : localSettings.contextLength}
+              onChange={(e) => {
+                const val = e.target.value;
+                setLocalSettings(prev => ({ ...prev, contextLength: val === '' ? undefined : parseInt(val) }));
+              }}
+              onBlur={() => {
+                if (localSettings.contextLength == null) {
+                  setLocalSettings(prev => ({ ...prev, contextLength: 30000 }));
+                }
+              }}
+              className="col-span-3 h-8 text-xs" 
+              placeholder="默认为30000tonken"
+            />
           </div>
 
           <div className="border-t pt-4 mt-2">

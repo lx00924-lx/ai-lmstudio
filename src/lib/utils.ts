@@ -5,6 +5,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length * 1.5);
+}
+
 export function formatMessageDate(date: Date | string): string {
   const d = new Date(date);
   const now = new Date();

@@ -13,6 +13,7 @@ import { cn, formatMessageDate } from '../../lib/utils';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { Toast } from '@capacitor/toast';
 import { API_BASE_URL } from '../../config';
+import { generateThumbnail, cacheFullImage } from '../../lib/imageHandler';
 
 interface ChatInputProps {
   onSendMessage: (text: string, type: 'text' | 'voice' | 'image', mediaUrl?: string) => void;
@@ -24,6 +25,7 @@ interface ChatInputProps {
 export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessage, onCancelQuote }) => {
   const [text, setText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [fullImageUrl, setFullImageUrl] = useState<string | null>(null); // For local cache
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -55,21 +57,42 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
   const handleSend = async () => {
     if (text.trim() || previewImage) {
       if (previewImage) {
-        // If previewImage is a large base64, we should upload it as a file
         try {
-          let imageUrl = previewImage;
-          if (previewImage.startsWith('data:')) {
-            const formData = new FormData();
-            const blob = await (await fetch(previewImage)).blob();
-            formData.append('image', blob, 'upload.jpg');
+          const blob = await (await fetch(previewImage)).blob();
+          const file = new File([blob], 'upload.jpg', { type: 'image/jpeg' });
+          
+          // Generate thumbnail for preview (already done, just need to use)
+          // For now, let's just implement the chunked upload for the full image
+          
+          const CHUNK_SIZE = 1024 * 1024 * 1; // 1MB chunks
+          const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+          const filename = `${Date.now()}_${file.name}`;
+          let imageUrl = '';
+
+          for (let i = 0; i < totalChunks; i++) {
+            const start = i * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, file.size);
+            const chunk = file.slice(start, end);
             
-            const res = await fetch(`${API_BASE_URL}/api/upload`, {
+            const formData = new FormData();
+            formData.append('chunk', chunk);
+            formData.append('chunkIndex', i.toString());
+            formData.append('totalChunks', totalChunks.toString());
+            formData.append('filename', filename);
+
+            const res = await fetch(`${API_BASE_URL}/api/upload-chunk`, {
               method: 'POST',
               body: formData
             });
             const data = await res.json();
-            imageUrl = data.url;
+            if (data.completed) {
+              imageUrl = data.url;
+              break;
+            }
           }
+          
+          // Cache locally
+          await cacheFullImage(file, filename);
           
           onSendMessage(text, 'image', imageUrl);
           setPreviewImage(null);

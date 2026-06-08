@@ -41,6 +41,7 @@ export interface AppSettings {
   splashImage?: string;
   splashSubtitle?: string;
   splashDuration?: number;
+  contextLength?: number;
 }
 
 export interface ChatState {

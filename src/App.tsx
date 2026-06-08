@@ -205,6 +205,16 @@ export default function App() {
       }));
     });
 
+    socket.on("messages_updated", (newMessages: Message[]) => {
+      setState(prev => ({
+        ...prev,
+        messages: newMessages.map((m: any) => ({
+          ...m,
+          timestamp: new Date(m.timestamp)
+        }))
+      }));
+    });
+
     socket.on("settings_updated", (newSettings: AppSettings) => {
       setState(prev => ({ ...prev, settings: newSettings }));
     });
@@ -212,6 +222,7 @@ export default function App() {
     return () => {
       socket.off("receive_message");
       socket.off("message_deleted");
+      socket.off("messages_updated");
       socket.off("settings_updated");
     };
   }, [user]);
@@ -390,6 +401,10 @@ export default function App() {
   };
 
   const deleteMessagesByRange = (days: number | 'all') => {
+    if (user) {
+      socket.emit("delete_messages_range", { userId: user.id, range: days });
+    }
+    
     setState(prev => {
       // The first message is effectively the welcome message if it exists
       const firstMessage = prev.messages[0];
@@ -407,7 +422,7 @@ export default function App() {
 
       const filtered = prev.messages.filter((m, index) => {
         if (index === 0 && m.role === 'assistant') return true;
-        return new Date(m.timestamp) < cutoff;
+        return new Date(m.timestamp) >= cutoff; // Keeps messages within the range
       });
 
       return {
@@ -1259,6 +1274,7 @@ export default function App() {
         onSave={handleSaveSettings} 
         onCheckUpdate={handleCheckUpdate}
         userId={user?.id}
+        username={user?.username}
       />
 
       <DeleteHistoryDialog
