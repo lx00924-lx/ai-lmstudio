@@ -94,7 +94,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
           // Cache locally
           await cacheFullImage(file, filename);
           
-          onSendMessage(text, 'image', imageUrl);
+          onSendMessage(text, 'image', imageUrl.startsWith('http') ? imageUrl : `${API_BASE_URL}${imageUrl}`);
           setPreviewImage(null);
         } catch (error) {
           console.error("Upload failed:", error);
