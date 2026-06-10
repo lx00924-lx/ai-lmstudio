@@ -10,7 +10,7 @@ export interface Message {
   role: MessageRole;
   content: string;
   timestamp: Date;
-  type: 'text' | 'voice' | 'image';
+  type: 'text' | 'voice' | 'image' | 'video';
   mediaUrl?: string;
   transcribedText?: string;
   quote?: {

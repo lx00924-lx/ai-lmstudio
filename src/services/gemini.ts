@@ -10,15 +10,19 @@ import { estimateTokens } from "../lib/utils";
 
 // Helper to sanitize API endpoint
 function sanitizeEndpoint(endpoint: string): string {
-  let sanitized = endpoint.trim();
+  let sanitized = endpoint.trim().replace(/\/$/, '');
+  
+  // If the user already provides a versioned endpoint, trust it.
+  if (sanitized.endsWith('/v1') || sanitized.endsWith('/v3')) {
+    return sanitized;
+  }
+  
   if (!sanitized.startsWith('http')) {
     sanitized = `http://${sanitized}`;
   }
-  // Ensure it ends with /v1 for LM Studio compatibility
-  if (!sanitized.endsWith('/v1') && !sanitized.endsWith('/v1/')) {
-    sanitized = `${sanitized.replace(/\/$/, '')}/v1`;
-  }
-  return sanitized;
+  
+  // Default to /v1
+  return `${sanitized}/v1`;
 }
 
 export async function sendMessageToGemini(

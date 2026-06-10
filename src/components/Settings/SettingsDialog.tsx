@@ -321,19 +321,27 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               )}
             </div>
           </div>
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="apiEndpoint" className="text-right text-xs">API 终端</Label>
-            <div className="col-span-3 flex items-center gap-2">
+          <div className="grid grid-cols-4 items-start gap-4">
+            <Label htmlFor="apiEndpoint" className="text-right text-xs mt-2.5">API 终端</Label>
+            <div className="col-span-3 flex flex-col gap-2">
               <Input 
                 id="apiEndpoint" 
                 name="apiEndpoint" 
                 value={localSettings.apiEndpoint} 
                 onChange={handleChange}
-                onBlur={() => fetchModels(localSettings.apiEndpoint)}
                 className="h-8 text-xs flex-1" 
                 placeholder="例如：http://localhost:1234" 
               />
-              {isFetchingModels && <Loader2 size={14} className="animate-spin text-muted-foreground shrink-0" />}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                onClick={() => fetchModels(localSettings.apiEndpoint)}
+                disabled={isFetchingModels}
+              >
+                {isFetchingModels ? <Loader2 size={14} className="animate-spin mr-2" /> : null}
+                获取模型列表
+              </Button>
             </div>
           </div>
 

@@ -323,13 +323,29 @@ const MessageItem: React.FC<{
                 loading="lazy"
                 onClick={() => window.open(message.mediaUrl, '_blank')}
                 onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                  console.error("Image render error");
+                  const target = e.target as HTMLImageElement;
+                  if (!target.dataset.retried) {
+                    target.dataset.retried = 'true';
+                    target.src = `${message.mediaUrl}?t=${Date.now()}`;
+                  } else {
+                    target.style.display = 'none';
+                    console.error("Image render error");
+                  }
                 }}
               />
               <div className="absolute bottom-2 right-2 opacity-0 group-hover/image:opacity-100 transition-opacity bg-black/50 backdrop-blur-md text-[10px] text-white px-2 py-1 rounded-md pointer-events-none">
                 查看原图 (4K+)
               </div>
+            </div>
+          )}
+          
+          {message.type === 'video' && message.mediaUrl && (
+            <div className="relative overflow-hidden rounded-lg mb-2 bg-muted/20">
+              <video 
+                src={message.mediaUrl} 
+                controls 
+                className="rounded-lg max-w-full h-auto"
+              />
             </div>
           )}
           
