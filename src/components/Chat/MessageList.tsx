@@ -339,16 +339,6 @@ const MessageItem: React.FC<{
             </div>
           )}
           
-          {message.type === 'video' && message.mediaUrl && (
-            <div className="relative overflow-hidden rounded-lg mb-2 bg-muted/20">
-              <video 
-                src={message.mediaUrl} 
-                controls 
-                className="rounded-lg max-w-full h-auto"
-              />
-            </div>
-          )}
-          
           {message.type === 'voice' && message.mediaUrl && (
             <>
               <VoiceMessagePlayer 

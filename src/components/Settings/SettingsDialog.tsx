@@ -22,6 +22,7 @@ import { CapacitorHttp } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { ImageCropDialog } from './ImageCropDialog';
+import { ModelSelector } from '../Chat/ModelSelector';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -121,7 +122,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
       }
     } catch (error) {
       console.error('Fetch models error:', error);
-      setModelFetchStatus({ type: 'error', message: `连接失败: ${error instanceof Error ? error.message : '请检查 API 地址及是否支持 CORS'}` });
+      const errorMessage = error instanceof Error ? error.message : '请检查 API 地址及是否支持 CORS';
+      const displayMessage = errorMessage === 'Failed to fetch' ? '模型获取失败，请手动输入' : `连接失败: ${errorMessage}`;
+      setModelFetchStatus({ type: 'error', message: displayMessage });
     } finally {
       setIsFetchingModels(false);
     }
@@ -294,31 +297,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           </div>
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="modelName" className="text-right text-xs">模型名称</Label>
-            <div className="col-span-3 relative">
-              {localSettings.availableModels && localSettings.availableModels.length > 0 ? (
-                <div className="relative">
-                  <select
-                    id="modelName"
-                    value={localSettings.modelName}
-                    onChange={(e) => setLocalSettings(prev => ({ ...prev, modelName: e.target.value }))}
-                    className="w-full h-8 text-xs rounded-md border border-input bg-background px-3 pr-8 appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                  >
-                    {localSettings.availableModels.map(model => (
-                      <option key={model} value={model}>{model}</option>
-                    ))}
-                  </select>
-                  <ChevronDown size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                </div>
-              ) : (
-                <Input 
-                  id="modelName" 
-                  name="modelName" 
-                  value={localSettings.modelName} 
-                  onChange={handleChange} 
-                  className="h-8 text-xs" 
-                  placeholder="先填写 API 地址，自动获取模型列表" 
-                />
-              )}
+            <div className="col-span-3">
+              <ModelSelector 
+                 settings={localSettings} 
+                 onUpdateSettings={setLocalSettings} 
+                 modelsOverride={localSettings.availableModels}
+              />
             </div>
           </div>
           <div className="grid grid-cols-4 items-start gap-4">
@@ -474,10 +458,17 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               value={localSettings.contextLength == null ? '' : localSettings.contextLength}
               onChange={(e) => {
                 const val = e.target.value;
-                setLocalSettings(prev => ({ ...prev, contextLength: val === '' ? undefined : parseInt(val) }));
+                if (val === '') {
+                  setLocalSettings(prev => ({ ...prev, contextLength: undefined }));
+                } else {
+                  const num = parseInt(val);
+                  if (!isNaN(num)) {
+                    setLocalSettings(prev => ({ ...prev, contextLength: Math.max(1, num) }));
+                  }
+                }
               }}
               onBlur={() => {
-                if (localSettings.contextLength == null) {
+                if (localSettings.contextLength == null || localSettings.contextLength <= 0) {
                   setLocalSettings(prev => ({ ...prev, contextLength: 30000 }));
                 }
               }}

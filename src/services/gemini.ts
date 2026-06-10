@@ -10,19 +10,42 @@ import { estimateTokens } from "../lib/utils";
 
 // Helper to sanitize API endpoint
 function sanitizeEndpoint(endpoint: string): string {
-  let sanitized = endpoint.trim().replace(/\/$/, '');
-  
-  // If the user already provides a versioned endpoint, trust it.
-  if (sanitized.endsWith('/v1') || sanitized.endsWith('/v3')) {
-    return sanitized;
-  }
-  
+  let sanitized = endpoint.trim();
   if (!sanitized.startsWith('http')) {
     sanitized = `http://${sanitized}`;
   }
+  // Ensure it ends with /v1 for LM Studio compatibility
+  if (!sanitized.endsWith('/v1') && !sanitized.endsWith('/v1/')) {
+    sanitized = `${sanitized.replace(/\/$/, '')}/v1`;
+  }
+  return sanitized;
+}
+
+export async function fetchModels(settings: AppSettings): Promise<string[]> {
+  if (!settings.apiEndpoint) return [];
   
-  // Default to /v1
-  return `${sanitized}/v1`;
+  try {
+    const sanitizedEndpoint = sanitizeEndpoint(settings.apiEndpoint);
+    const url = `${sanitizedEndpoint.replace(/\/v1$/, '')}/v1/models`;
+    
+    const options = {
+      url: url,
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${settings.apiKey || "lm-studio"}`
+      },
+      connectTimeout: 5000,
+      readTimeout: 5000
+    };
+    
+    const response = await CapacitorHttp.request(options);
+    if (response.status === 200 && Array.isArray(response.data.data)) {
+      return response.data.data.map((m: any) => m.id);
+    }
+  } catch (err) {
+    console.error("Failed to fetch models:", err);
+  }
+  return [];
 }
 
 export async function sendMessageToGemini(
