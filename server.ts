@@ -175,47 +175,33 @@ async function startServer() {
     }
   });
 
-  app.post("/api/upload-init", express.json(), async (req, res) => {
-    const { totalSize, filename } = req.body;
-    const uploadId = Date.now().toString() + Math.random().toString(36).substring(7);
-    const tempDir = path.join(UPLOADS_DIR, `temp_${uploadId}`);
-    await fs.mkdir(tempDir, { recursive: true });
-    res.json({ uploadId });
-  });
-
   app.post("/api/upload-chunk", upload.single("chunk"), async (req, res) => {
     try {
-      const { uploadId, chunkIndex } = req.body;
-      const tempDir = path.join(UPLOADS_DIR, `temp_${uploadId}`);
-      await fs.rename(req.file!.path, path.join(tempDir, chunkIndex));
-      res.json({ success: true });
+      const { filename, chunkIndex, totalChunks } = req.body;
+      const chunkDir = path.join(UPLOADS_DIR, `temp_${filename}`);
+      await fs.mkdir(chunkDir, { recursive: true });
+      await fs.rename(req.file!.path, path.join(chunkDir, chunkIndex));
+      
+      const files = await fs.readdir(chunkDir);
+      if (files.length === parseInt(totalChunks)) {
+        // Assemble
+        const finalPath = path.join(UPLOADS_DIR, filename);
+        const writeStream = require('fs').createWriteStream(finalPath);
+        for (let i = 0; i < files.length; i++) {
+          const chunkPath = path.join(chunkDir, i.toString());
+          const chunkData = await fs.readFile(chunkPath);
+          writeStream.write(chunkData);
+          await fs.unlink(chunkPath);
+        }
+        writeStream.end();
+        await fs.rmdir(chunkDir);
+        res.json({ url: `/uploads/${filename}`, completed: true });
+      } else {
+        res.json({ completed: false });
+      }
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: "Chunk upload failed" });
-    }
-  });
-
-  app.post("/api/upload-merge", express.json(), async (req, res) => {
-    try {
-      const { uploadId, filename, totalChunks } = req.body;
-      const tempDir = path.join(UPLOADS_DIR, `temp_${uploadId}`);
-      const finalPath = path.join(UPLOADS_DIR, `${Date.now()}_${filename}`);
-      
-      const writeStream = fs.createWriteStream(finalPath);
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkPath = path.join(tempDir, i.toString());
-        const chunkData = await fs.readFile(chunkPath);
-        writeStream.write(chunkData);
-        await fs.unlink(chunkPath);
-      }
-      writeStream.end();
-      await fs.rmdir(tempDir);
-      
-      const relativeUrl = `/uploads/${path.basename(finalPath)}`;
-      res.json({ url: relativeUrl });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: "Merge failed" });
     }
   });
   
