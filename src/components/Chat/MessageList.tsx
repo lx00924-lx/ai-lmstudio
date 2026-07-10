@@ -12,6 +12,7 @@ import { cn, formatMessageDate } from '../../lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2 } from 'lucide-react';
+import { Button } from '../ui/button';
 import { Clipboard } from '@capacitor/clipboard';
 import { Toast } from '@capacitor/toast';
 
@@ -206,6 +207,7 @@ interface MessageListProps {
   onQuote?: (message: Message) => void;
   onTranscribe?: (message: Message) => void;
   onDelete?: (id: string) => void;
+  onRetry?: (message: Message) => void;
 }
 
 const MessageItem: React.FC<{
@@ -227,6 +229,7 @@ const MessageItem: React.FC<{
   scrollToMessage: (id: string) => void;
   messageRef?: (el: HTMLDivElement | null) => void;
   onRegisterReplay?: (id: string, play: () => void) => void;
+  onRetry?: (message: Message) => void;
 }> = ({
   message,
   isSelected,
@@ -245,7 +248,8 @@ const MessageItem: React.FC<{
   onClick,
   scrollToMessage,
   messageRef,
-  onRegisterReplay
+  onRegisterReplay,
+  onRetry
 }) => {
   return (
     <motion.div
@@ -318,24 +322,31 @@ const MessageItem: React.FC<{
               <img 
                 src={message.mediaUrl} 
                 alt="Uploaded" 
-                className="rounded-lg max-w-full h-auto cursor-zoom-in transition-transform group-hover/image:scale-[1.01] active:scale-95"
+                className={cn("rounded-lg max-w-full h-auto cursor-zoom-in transition-transform group-hover/image:scale-[1.01] active:scale-95", message.status === 'sending' && "opacity-50")}
                 referrerPolicy="no-referrer"
                 loading="lazy"
-                onClick={() => window.open(message.mediaUrl, '_blank')}
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  if (!target.dataset.retried) {
-                    target.dataset.retried = 'true';
-                    target.src = `${message.mediaUrl}?t=${Date.now()}`;
-                  } else {
-                    target.style.display = 'none';
-                    console.error("Image render error");
-                  }
-                }}
+                onClick={() => message.status === 'sent' && window.open(message.mediaUrl, '_blank')}
               />
-              <div className="absolute bottom-2 right-2 opacity-0 group-hover/image:opacity-100 transition-opacity bg-black/50 backdrop-blur-md text-[10px] text-white px-2 py-1 rounded-md pointer-events-none">
-                查看原图 (4K+)
-              </div>
+              
+              {message.status === 'sending' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/20">
+                  <div className="w-full px-4">
+                    <div className="h-1 bg-white/30 rounded-full overflow-hidden">
+                      <div className="h-full bg-primary transition-all duration-300" style={{ width: `${message.progress || 0}%` }} />
+                    </div>
+                  </div>
+                  <span className="text-white text-xs font-mono mt-2">{Math.round(message.progress || 0)}%</span>
+                </div>
+              )}
+
+              {message.status === 'failed' && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                  <Button variant="ghost" className="text-white hover:bg-white/20" onClick={() => onRetry?.(message)}>
+                    <RefreshCcw size={20} className="mr-2" />
+                    重试
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           
@@ -416,7 +427,8 @@ export const MessageList: React.FC<MessageListProps> = ({
   onEnterSelectionMode,
   onQuote,
   onTranscribe,
-  onDelete
+  onDelete,
+  onRetry
 }) => {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
@@ -428,6 +440,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const replayRefs = React.useRef<{ [key: string]: () => void }>({});
   const lastSelectedId = React.useRef<string | null>(null);
   const touchStartPos = React.useRef<{ x: number; y: number } | null>(null);
+  const prevMessagesCount = React.useRef(messages.length);
 
   React.useEffect(() => {
     const handleSelectionChange = () => {
@@ -650,23 +663,28 @@ export const MessageList: React.FC<MessageListProps> = ({
 
   React.useEffect(() => {
     const searchStatusChanged = prevIsSearching.current !== isSearching;
-    const searchCancelled = prevIsSearching.current && !isSearching;
     const isFirst = isFirstScroll.current;
     
     // Update the ref for next render
     prevIsSearching.current = isSearching;
 
+    // Detect if the number of messages actually increased
+    const messageCountChanged = messages.length !== prevMessagesCount.current;
+    prevMessagesCount.current = messages.length;
+
     const scrollToBottom = () => {
       if (scrollRef.current && !isSelectionMode && !isNavigatingSearchMatch.current) {
-        // Use instant scroll if it's the first scroll OR if search status just changed (on/off)
-        const shouldBeInstant = isFirst || searchStatusChanged;
+        // Only auto-scroll if it's the first load, search status changed, or a new message was added
+        const shouldScroll = isFirst || searchStatusChanged || messageCountChanged;
         
-        scrollRef.current.scrollTo({
-          top: scrollRef.current.scrollHeight,
-          behavior: shouldBeInstant ? 'auto' : 'smooth'
-        });
-        
-        if (isFirst) isFirstScroll.current = false;
+        if (shouldScroll) {
+          scrollRef.current.scrollTo({
+            top: scrollRef.current.scrollHeight,
+            behavior: (isFirst || searchStatusChanged) ? 'auto' : 'smooth'
+          });
+          
+          if (isFirst) isFirstScroll.current = false;
+        }
       }
     };
     
@@ -725,6 +743,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             scrollToMessage={scrollToMessage}
             messageRef={(el) => { messageRefs.current[message.id] = el; }}
             onRegisterReplay={(id, play) => { replayRefs.current[id] = play; }}
+            onRetry={onRetry}
           />
         ))}
         

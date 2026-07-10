@@ -469,6 +469,47 @@ export default function App() {
     }
   };
 
+  const handleRetryMessage = async (message: Message) => {
+    const file = filesRef.current[message.id];
+    if (!file) {
+      console.error("No file found for retry");
+      await Toast.show({ text: '无法找到原始文件，请重试发送' });
+      return;
+    }
+
+    setState(prev => ({
+      ...prev,
+      messages: prev.messages.map(m => m.id === message.id ? { ...m, status: 'sending', progress: 0 } : m)
+    }));
+
+    try {
+      const imageUrl = await uploadImageChunked(file, message.id, (progress) => {
+        setState(prev => ({
+          ...prev,
+          messages: prev.messages.map(m => m.id === message.id ? { ...m, progress } : m)
+        }));
+      });
+      
+      delete filesRef.current[message.id];
+      const finalMessage = { ...message, status: 'sent', mediaUrl: imageUrl };
+      setState(prev => ({
+        ...prev,
+        messages: prev.messages.map(m => m.id === message.id ? finalMessage : m)
+      }));
+
+      if (user && user.id !== 'guest') {
+        socket.emit("send_message", { userId: user.id, message: finalMessage });
+      }
+      
+      runGeminiQuery([...state.messages.filter(m => m.id !== message.id), finalMessage]);
+    } catch (error) {
+      setState(prev => ({
+        ...prev,
+        messages: prev.messages.map(m => m.id === message.id ? { ...m, status: 'failed' } : m)
+      }));
+    }
+  };
+
   const handleCopySelected = async () => {
     const content = state.messages
       .filter(m => selectedMessageIds.includes(m.id))
@@ -636,6 +677,7 @@ export default function App() {
   };
 
   const queueRef = useRef<Message[]>([]);
+  const filesRef = useRef<Record<string, File>>({});
 
   const runGeminiQuery = useCallback(async (allMessagesSoFar: Message[]) => {
     const assistantMessageId = crypto.randomUUID();
@@ -701,14 +743,60 @@ export default function App() {
     }
   }, [state.isLoading, state.messages, runGeminiQuery]);
 
-  const handleSendMessage = useCallback(async (content: string, type: 'text' | 'voice' | 'image', mediaUrl?: string) => {
+  const uploadImageChunked = async (file: File, messageId: string, onProgress: (progress: number) => void) => {
+    const CHUNK_SIZE = 1024 * 1024; // 1MB
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const filename = `${Date.now()}_${file.name}`;
+    let uploadId = '';
+
+    // 1. Init
+    const initRes = await fetch(`${API_BASE_URL}/api/upload-init`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, totalSize: file.size })
+    });
+    const initData = await initRes.json();
+    uploadId = initData.uploadId;
+
+    // 2. Upload Chunks
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+      
+      const formData = new FormData();
+      formData.append('chunk', chunk);
+      formData.append('chunkIndex', i.toString());
+      formData.append('uploadId', uploadId);
+
+      await fetch(`${API_BASE_URL}/api/upload-chunk`, {
+        method: 'POST',
+        body: formData
+      });
+      onProgress(((i + 1) / totalChunks) * 100);
+    }
+
+    // 3. Merge
+    const mergeRes = await fetch(`${API_BASE_URL}/api/upload-merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId, filename, totalChunks })
+    });
+    const mergeData = await mergeRes.json();
+    return mergeData.url;
+  };
+
+  const handleSendMessage = useCallback(async (content: string, type: 'text' | 'voice' | 'image', mediaUrl?: string, file?: File) => {
+    const messageId = crypto.randomUUID();
     const userMessage: Message = {
-      id: crypto.randomUUID(),
+      id: messageId,
       role: 'user',
       content,
       timestamp: new Date(),
       type,
       mediaUrl,
+      status: type === 'image' ? 'sending' : undefined,
+      progress: type === 'image' ? 0 : undefined,
       quote: quotedMessage ? {
         id: quotedMessage.id,
         userName: quotedMessage.role === 'assistant' ? state.settings.aiName : state.settings.userName,
@@ -717,33 +805,61 @@ export default function App() {
       } : undefined
     };
 
-    setQuotedMessage(null); // Clear quote after sending
+    setQuotedMessage(null); 
 
     if (!state.settings.apiKey && !process.env.GEMINI_API_KEY) {
       setState(prev => ({ ...prev, error: "请在设置中配置 API Key 以开始聊天。" }));
       return;
     }
 
-    // Add user message to state locally
     setState(prev => ({
       ...prev,
       messages: [...prev.messages, userMessage]
     }));
 
-    if (user?.id === 'guest') {
-      const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
-      localStorage.setItem('guest_messages', JSON.stringify([...existing, userMessage]));
-    }
+    if (type === 'image' && file) {
+      filesRef.current[messageId] = file;
+      try {
+        const imageUrl = await uploadImageChunked(file, messageId, (progress) => {
+          setState(prev => ({
+            ...prev,
+            messages: prev.messages.map(m => m.id === messageId ? { ...m, progress } : m)
+          }));
+        });
+        
+        delete filesRef.current[messageId];
+        const finalMessage = { ...userMessage, status: 'sent', mediaUrl: imageUrl };
+        setState(prev => ({
+          ...prev,
+          messages: prev.messages.map(m => m.id === messageId ? finalMessage : m)
+        }));
 
-    // Emit to socket to sync and save
-    if (user && user.id !== 'guest') {
-      socket.emit("send_message", { userId: user.id, message: userMessage });
-    }
-
-    if (state.isLoading) {
-      queueRef.current.push(userMessage);
+        if (user && user.id !== 'guest') {
+          socket.emit("send_message", { userId: user.id, message: finalMessage });
+        }
+        
+        runGeminiQuery([...state.messages, finalMessage]);
+      } catch (error) {
+        setState(prev => ({
+          ...prev,
+          messages: prev.messages.map(m => m.id === messageId ? { ...m, status: 'failed' } : m)
+        }));
+      }
     } else {
-      runGeminiQuery([...state.messages, userMessage]);
+        if (user?.id === 'guest') {
+          const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
+          localStorage.setItem('guest_messages', JSON.stringify([...existing, userMessage]));
+        }
+
+        if (user && user.id !== 'guest') {
+          socket.emit("send_message", { userId: user.id, message: userMessage });
+        }
+
+        if (state.isLoading) {
+          queueRef.current.push(userMessage);
+        } else {
+          runGeminiQuery([...state.messages, userMessage]);
+        }
     }
   }, [state.messages, state.settings, quotedMessage, state.isLoading, runGeminiQuery]);
 
@@ -1211,6 +1327,7 @@ export default function App() {
             onQuote={handleQuote}
             onTranscribe={handleTranscribe}
             onDelete={handleDeleteMessage}
+            onRetry={handleRetryMessage}
           />
 
           {/* Input Area */}

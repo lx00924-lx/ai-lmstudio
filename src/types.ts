@@ -19,6 +19,8 @@ export interface Message {
     content: string;
     timestamp: Date;
   };
+  status?: 'sending' | 'sent' | 'failed';
+  progress?: number;
 }
 
 export interface AppSettings {

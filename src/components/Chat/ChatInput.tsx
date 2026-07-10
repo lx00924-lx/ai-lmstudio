@@ -61,51 +61,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
           const blob = await (await fetch(previewImage)).blob();
           const file = new File([blob], 'upload.jpg', { type: 'image/jpeg' });
           
-          // Generate thumbnail for preview (already done, just need to use)
-          // For now, let's just implement the chunked upload for the full image
-          
-          const CHUNK_SIZE = 1024 * 1024 * 1; // 1MB chunks
-          const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-          const filename = `${Date.now()}_${file.name}`;
-          let imageUrl = '';
-
-          for (let i = 0; i < totalChunks; i++) {
-            const start = i * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, file.size);
-            const chunk = file.slice(start, end);
-            
-            const formData = new FormData();
-            formData.append('chunk', chunk);
-            formData.append('chunkIndex', i.toString());
-            formData.append('totalChunks', totalChunks.toString());
-            formData.append('filename', filename);
-
-            const res = await fetch(`${API_BASE_URL}/api/upload-chunk`, {
-              method: 'POST',
-              body: formData
-            });
-            const data = await res.json();
-            if (data.completed) {
-              imageUrl = data.url;
-              break;
-            }
-          }
-          
-          // Cache locally
-          await cacheFullImage(file, filename);
-          
-          onSendMessage(text, 'image', imageUrl.startsWith('http') ? imageUrl : `${API_BASE_URL}${imageUrl}`);
+          onSendMessage(text, 'image', previewImage, file);
           setPreviewImage(null);
         } catch (error) {
-          console.error("Upload failed:", error);
-          await Toast.show({ text: '图片发送失败，请重试' });
+          console.error("Initiation failed:", error);
+          await Toast.show({ text: '图片准备失败，请重试' });
         }
       } else {
         onSendMessage(text, 'text');
       }
       setText('');
       
-      // Explicitly focus after a short delay to ensure DOM update
       setTimeout(() => {
         inputRef.current?.focus();
       }, 50);
