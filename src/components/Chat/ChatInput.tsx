@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus } from 'lucide-react';
+import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus, Phone } from 'lucide-react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatMessageDate } from '../../lib/utils';
@@ -20,9 +20,10 @@ interface ChatInputProps {
   disabled?: boolean;
   quotedMessage?: any;
   onCancelQuote?: () => void;
+  onStartCall?: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessage, onCancelQuote }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessage, onCancelQuote, onStartCall }) => {
   const [text, setText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null); // For local cache
@@ -367,6 +368,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
                     onChange={handleImageUpload}
                     accept="image/*"
                 />
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <Button 
+                  type="button"
+                  variant="ghost" 
+                  size="icon" 
+                  className="w-14 h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onStartCall?.();
+                  }}
+                  disabled={isRecording}
+                >
+                  <Phone size={22} className="text-primary animate-pulse" />
+                </Button>
+                <span className="text-[10px] text-muted-foreground font-medium">语音通话</span>
               </div>
             </motion.div>
           )}

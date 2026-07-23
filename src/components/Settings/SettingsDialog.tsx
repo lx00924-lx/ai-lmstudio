@@ -449,6 +449,34 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
             <Input id="systemInstruction" name="systemInstruction" value={localSettings.systemInstruction || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：你是一个专业的程序员" />
           </div>
 
+          <div className="border-t pt-4 mt-2">
+            <h4 className="text-xs font-semibold mb-3">语音转写设置 (FunASR)</h4>
+            <div className="space-y-3">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="funasrHttpEndpoint" className="text-right text-xs">转写 HTTP</Label>
+                <Input 
+                  id="funasrHttpEndpoint" 
+                  name="funasrHttpEndpoint" 
+                  value={localSettings.funasrHttpEndpoint || ''} 
+                  onChange={handleChange} 
+                  className="col-span-3 h-8 text-xs" 
+                  placeholder="例如：http://127.0.0.1:7860/asr" 
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="funasrWsEndpoint" className="text-right text-xs">实时流 WS</Label>
+                <Input 
+                  id="funasrWsEndpoint" 
+                  name="funasrWsEndpoint" 
+                  value={localSettings.funasrWsEndpoint || ''} 
+                  onChange={handleChange} 
+                  className="col-span-3 h-8 text-xs" 
+                  placeholder="例如：ws://127.0.0.1:10095" 
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="contextLength" className="text-right text-xs">上下文长度</Label>
             <Input 

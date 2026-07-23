@@ -269,3 +269,46 @@ export async function sendMessageToGemini(
     throw new Error("发生未知错误，请稍后再试。");
   }
 }
+
+export async function transcribeAudio(mediaUrl: string, endpoint: string): Promise<string> {
+  let blob: Blob;
+  
+  if (mediaUrl.startsWith('data:')) {
+    const commaIndex = mediaUrl.indexOf(',');
+    const base64Data = mediaUrl.substring(commaIndex + 1);
+    const mimeMatch = mediaUrl.match(/data:([^;]+);/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'audio/wav';
+    
+    const bstr = atob(base64Data);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    blob = new Blob([u8arr], { type: mimeType });
+  } else {
+    const res = await fetch(mediaUrl);
+    blob = await res.blob();
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('file', blob, 'audio.wav');
+    
+    const proxyUrl = `/api/funasr-transcribe?endpoint=${encodeURIComponent(endpoint)}`;
+    const response = await fetch(proxyUrl, {
+      method: 'POST',
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP 错误 ${response.status}`);
+    }
+    const data = await response.json();
+    const text = data.text || data.result || (Array.isArray(data.data) ? data.data[0] : null) || (data.data && data.data.text) || JSON.stringify(data);
+    return text;
+  } catch (err) {
+    console.error("FunASR HTTP Transcribe connection error:", err);
+    throw err;
+  }
+}

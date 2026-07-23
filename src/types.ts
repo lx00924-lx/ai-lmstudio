@@ -42,6 +42,8 @@ export interface AppSettings {
   splashSubtitle?: string;
   splashDuration?: number;
   contextLength?: number;
+  funasrHttpEndpoint?: string;
+  funasrWsEndpoint?: string;
 }
 
 export interface ChatState {

@@ -16,8 +16,9 @@ import { SettingsDialog } from './components/Settings/SettingsDialog';
 import { DeleteHistoryDialog } from './components/Chat/DeleteHistoryDialog';
 import { UpdateDialog } from './components/Chat/UpdateDialog';
 import { AuthScreen } from './components/Auth/AuthScreen';
+import { CallOverlay } from './components/Chat/CallOverlay';
 import { Message, ChatState, AppSettings } from './types';
-import { sendMessageToGemini } from './services/gemini';
+import { sendMessageToGemini, transcribeAudio } from './services/gemini';
 import socket from './lib/socket';
 import { API_BASE_URL } from './config';
 import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff, LogOut } from 'lucide-react';
@@ -81,6 +82,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDeleteHistoryOpen, setIsDeleteHistoryOpen] = useState(false);
+  const [isCallOpen, setIsCallOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; url: string; apkUrl?: string } | null>(null);
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -606,17 +608,21 @@ export default function App() {
 
     setState(prev => ({ ...prev, isLoading: true }));
     try {
-      // Use the existing sendMessageToGemini but with a specific transcription prompt
-      const transcriptionPrompt: Message = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: "请将这段语音转录为文字。只返回转录内容，不要有任何其他解释。",
-        timestamp: new Date(),
-        type: 'voice',
-        mediaUrl: message.mediaUrl
-      };
-
-      const result = await sendMessageToGemini([transcriptionPrompt], state.settings);
+      let result = "";
+      if (state.settings.funasrHttpEndpoint) {
+        result = await transcribeAudio(message.mediaUrl, state.settings.funasrHttpEndpoint);
+      } else {
+        // Use the existing sendMessageToGemini but with a specific transcription prompt
+        const transcriptionPrompt: Message = {
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: "请将这段语音转录为文字。只返回转录内容，不要有任何其他解释。",
+          timestamp: new Date(),
+          type: 'voice',
+          mediaUrl: message.mediaUrl
+        };
+        result = await sendMessageToGemini([transcriptionPrompt], state.settings);
+      }
       
       setState(prev => ({
         ...prev,
@@ -702,13 +708,33 @@ export default function App() {
   }, [state.isLoading, state.messages, runGeminiQuery]);
 
   const handleSendMessage = useCallback(async (content: string, type: 'text' | 'voice' | 'image', mediaUrl?: string) => {
+    let finalContent = content;
+    let transcribedText = undefined;
+
+    if (type === 'voice' && mediaUrl && state.settings.funasrHttpEndpoint) {
+      try {
+        setState(prev => ({ ...prev, isLoading: true }));
+        const resText = await transcribeAudio(mediaUrl, state.settings.funasrHttpEndpoint);
+        if (resText) {
+          finalContent = resText;
+          transcribedText = resText;
+        }
+      } catch (e) {
+        console.error("Auto transcribe voice message error:", e);
+        await Toast.show({ text: "FunASR 语音识别失败，请检查设置中的 HTTP 地址" });
+      } finally {
+        setState(prev => ({ ...prev, isLoading: false }));
+      }
+    }
+
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
-      content,
+      content: finalContent,
       timestamp: new Date(),
       type,
       mediaUrl,
+      transcribedText,
       quote: quotedMessage ? {
         id: quotedMessage.id,
         userName: quotedMessage.role === 'assistant' ? state.settings.aiName : state.settings.userName,
@@ -746,6 +772,28 @@ export default function App() {
       runGeminiQuery([...state.messages, userMessage]);
     }
   }, [state.messages, state.settings, quotedMessage, state.isLoading, runGeminiQuery]);
+
+  const handleCallEnd = useCallback((newMessages: Message[]) => {
+    if (newMessages.length === 0) return;
+
+    // 批量追加到消息列表
+    setState(prev => ({
+      ...prev,
+      messages: [...prev.messages, ...newMessages]
+    }));
+
+    // 保存并同步
+    if (user?.id === 'guest') {
+      const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
+      localStorage.setItem('guest_messages', JSON.stringify([...existing, ...newMessages]));
+    } else if (user) {
+      newMessages.forEach(msg => {
+        socket.emit("send_message", { userId: user.id, message: msg });
+      });
+    }
+
+    Toast.show({ text: `通话结束，已自动保存对话记录` });
+  }, [user]);
 
 
   const handleCheckUpdate = async (): Promise<{ success: boolean; data?: any; error?: string }> => {
@@ -1260,6 +1308,7 @@ export default function App() {
                     onSendMessage={handleSendMessage} 
                     quotedMessage={quotedMessage}
                     onCancelQuote={() => setQuotedMessage(null)}
+                    onStartCall={() => setIsCallOpen(true)}
                   />
                 </motion.div>
               )}
@@ -1267,6 +1316,14 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      <CallOverlay 
+        open={isCallOpen}
+        onClose={() => setIsCallOpen(false)}
+        settings={state.settings}
+        historyMessages={state.messages}
+        onCallEnd={handleCallEnd}
+      />
 
       <SettingsDialog 
         open={isSettingsOpen} 

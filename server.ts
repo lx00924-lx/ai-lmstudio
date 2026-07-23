@@ -210,6 +210,68 @@ async function startServer() {
     res.json({ url: `/uploads/${req.file.filename}` });
   });
 
+  // Proxy route for FunASR to avoid browser CORS and Mixed Content issues
+  app.post("/api/funasr-transcribe", upload.single("file"), async (req, res) => {
+    try {
+      const endpoint = req.query.endpoint as string;
+      if (!endpoint) {
+        return res.status(400).json({ error: "Missing endpoint parameter" });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      const fileBuffer = await fs.readFile(req.file.path);
+      const blob = new Blob([fileBuffer], { type: req.file.mimetype });
+      const formData = new FormData();
+      
+      // Standardize filenames (often FunASR C++ HTTP server parses names)
+      const fileName = req.file.originalname || "audio.wav";
+      
+      // Send as both 'audio_in' (used by FunASR C++ HTTP servers) and 'file' (used by some FastAPI/Python/other servers)
+      formData.append("audio_in", blob, fileName);
+      formData.append("file", blob, fileName);
+      formData.append("wav_name", fileName);
+      formData.append("wav_format", "wav");
+      formData.append("is_itn", "1");
+
+      let sanitized = endpoint.trim();
+      if (!sanitized.startsWith('http')) {
+        sanitized = `http://${sanitized}`;
+      }
+
+      console.log(`[FunASR Proxy] Sending request to: ${sanitized}`);
+      const response = await fetch(sanitized, {
+        method: "POST",
+        body: formData,
+      });
+
+      // Try to clean up local file
+      try {
+        await fs.unlink(req.file.path);
+      } catch (err) {
+        console.error("Failed to delete temp proxy file:", err);
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[FunASR Proxy] Error from target server: ${response.status} - ${errorText}`);
+        return res.status(response.status).json({ error: `FunASR server returned status ${response.status}` });
+      }
+
+      const data = await response.json();
+      res.json(data);
+    } catch (error: any) {
+      console.error("[FunASR Proxy] Exception:", error);
+      if (req.file && req.file.path) {
+        try {
+          await fs.unlink(req.file.path);
+        } catch (_) {}
+      }
+      res.status(500).json({ error: error.message || "Failed to proxy FunASR request" });
+    }
+  });
+
   // Socket.io for Real-time Sync
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
