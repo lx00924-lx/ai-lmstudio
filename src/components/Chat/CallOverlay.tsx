@@ -99,13 +99,23 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
     try {
       // 1. 初始化 FunASR WS
-      let wsUrl = settings.funasrWsEndpoint!.trim();
-      if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
-        wsUrl = `ws://${wsUrl}`;
+      let targetWsUrl = settings.funasrWsEndpoint!.trim();
+      if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
+        targetWsUrl = `ws://${targetWsUrl}`;
+      }
+
+      // 如果未包含代理路径，则通过服务器的 /api/funasr-ws 端点代理转发，以消除跨域和 HTTPS 混合内容限制
+      let finalWsUrl = targetWsUrl;
+      if (!targetWsUrl.includes('/api/funasr-ws')) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host;
+        if (host) {
+          finalWsUrl = `${protocol}//${host}/api/funasr-ws?endpoint=${encodeURIComponent(targetWsUrl)}`;
+        }
       }
       
-      console.log('Connecting to FunASR WS:', wsUrl);
-      const ws = new WebSocket(wsUrl);
+      console.log('Connecting to FunASR WS (via proxy):', finalWsUrl);
+      const ws = new WebSocket(finalWsUrl);
       wsRef.current = ws;
       ws.binaryType = 'arraybuffer';
 

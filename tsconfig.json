@@ -22,5 +22,7 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "include": ["src/**/*", "server.ts"],
+  "exclude": ["electron", "android", "dist", "node_modules"]
 }

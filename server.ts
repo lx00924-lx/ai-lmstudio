@@ -1,6 +1,7 @@
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import path from "path";
 import fs from "fs/promises";
 import multer from "multer";
@@ -269,6 +270,98 @@ async function startServer() {
         } catch (_) {}
       }
       res.status(500).json({ error: error.message || "Failed to proxy FunASR request" });
+    }
+  });
+
+  // WebSocket Proxy for Real-time Streaming FunASR
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    try {
+      const requestUrl = new URL(request.url || "", `http://${request.headers.host || "localhost"}`);
+      if (requestUrl.pathname === "/api/funasr-ws") {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit("connection", ws, request);
+        });
+      }
+    } catch (err) {
+      console.error("[WS Upgrade Error]", err);
+    }
+  });
+
+  wss.on("connection", (clientWs, request) => {
+    try {
+      const requestUrl = new URL(request.url || "", `http://${request.headers.host || "localhost"}`);
+      let targetEndpoint = requestUrl.searchParams.get("endpoint");
+
+      if (!targetEndpoint) {
+        console.error("[FunASR WS Proxy] Missing target endpoint");
+        clientWs.close(1008, "Missing endpoint parameter");
+        return;
+      }
+
+      targetEndpoint = targetEndpoint.trim();
+      if (!targetEndpoint.startsWith("ws://") && !targetEndpoint.startsWith("wss://")) {
+        targetEndpoint = `ws://${targetEndpoint}`;
+      }
+
+      console.log(`[FunASR WS Proxy] Proxying WebSocket connection to target: ${targetEndpoint}`);
+
+      const targetWs = new WSWebSocket(targetEndpoint);
+      const pendingBuffer: any[] = [];
+
+      targetWs.on("open", () => {
+        console.log(`[FunASR WS Proxy] Connected to target FunASR WS: ${targetEndpoint}`);
+        while (pendingBuffer.length > 0 && targetWs.readyState === WSWebSocket.OPEN) {
+          const msg = pendingBuffer.shift();
+          if (msg !== undefined) targetWs.send(msg);
+        }
+      });
+
+      targetWs.on("message", (data, isBinary) => {
+        if (clientWs.readyState === WSWebSocket.OPEN) {
+          clientWs.send(data, { binary: isBinary });
+        }
+      });
+
+      targetWs.on("error", (err) => {
+        console.error("[FunASR WS Proxy] Target WS error:", err.message);
+        if (clientWs.readyState === WSWebSocket.OPEN) {
+          clientWs.close(1011, `Target error: ${err.message}`);
+        }
+      });
+
+      targetWs.on("close", (code, reason) => {
+        console.log(`[FunASR WS Proxy] Target WS closed: ${code}`);
+        if (clientWs.readyState === WSWebSocket.OPEN) {
+          clientWs.close(code, reason);
+        }
+      });
+
+      clientWs.on("message", (data, isBinary) => {
+        if (targetWs.readyState === WSWebSocket.OPEN) {
+          targetWs.send(data, { binary: isBinary });
+        } else if (targetWs.readyState === WSWebSocket.CONNECTING) {
+          pendingBuffer.push(data);
+        }
+      });
+
+      clientWs.on("error", (err) => {
+        console.error("[FunASR WS Proxy] Client WS error:", err.message);
+        if (targetWs.readyState === WSWebSocket.OPEN || targetWs.readyState === WSWebSocket.CONNECTING) {
+          targetWs.close();
+        }
+      });
+
+      clientWs.on("close", () => {
+        console.log("[FunASR WS Proxy] Client WS connection closed");
+        if (targetWs.readyState === WSWebSocket.OPEN || targetWs.readyState === WSWebSocket.CONNECTING) {
+          targetWs.close();
+        }
+      });
+    } catch (err: any) {
+      console.error("[FunASR WS Proxy] Setup exception:", err);
+      clientWs.close(1011, err?.message || "Proxy setup failed");
     }
   });
 
