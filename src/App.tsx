@@ -819,7 +819,7 @@ export default function App() {
       
       const data = await response.json();
       const latestVersion = data.tag_name;
-      const currentVersion = localStorage.getItem('app_version') || 'v0.0.5'; 
+      const currentVersion = localStorage.getItem('app_version') || 'v0.0.10'; 
 
       // Find APK in assets
       const apkAsset = data.assets?.find((asset: any) => asset.name.endsWith('.apk'));
