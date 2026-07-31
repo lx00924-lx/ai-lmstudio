@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { PhoneOff, Mic, MicOff, Volume2, Loader2, RefreshCw, Send } from 'lucide-react';
+import { PhoneOff, Mic, MicOff, Volume2, Loader2, RefreshCw, Send, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppSettings, Message } from '../../types';
 import { sendMessageToGemini } from '../../services/gemini';
@@ -59,6 +59,19 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   const pendingTtsTextRef = useRef('');
   const ttsCleanTimerRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const lastTtsEndTimeRef = useRef<number>(0);
+  const aiScrollRef = useRef<HTMLDivElement | null>(null);
+
+  // AI 文本更新时自动平滑滚动到底部
+  useEffect(() => {
+    if (aiScrollRef.current) {
+      aiScrollRef.current.scrollTo({
+        top: aiScrollRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [aiText]);
 
   // Sync status ref
   useEffect(() => {
@@ -82,6 +95,163 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     };
   }, [open, settings.funasrWsEndpoint]);
 
+  // 初始化/重连 FunASR WebSocket
+  const connectFunasrWs = (customUrl?: string) => {
+    const rawEndpoint = customUrl || settings?.funasrWsEndpoint || '';
+    if (!rawEndpoint.trim()) {
+      if (statusRef.current === 'connecting') {
+        setStatus('error');
+        setErrorMessage('请先在“应用设置”中配置 FunASR 实时流式语音 WS 地址。');
+      }
+      return;
+    }
+
+    let targetWsUrl = rawEndpoint.trim();
+    if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
+      targetWsUrl = `ws://${targetWsUrl}`;
+    }
+
+    // 判断是否为打包 Native App 环境（如 Capacitor / Cordova / WebView / file: 协议）
+    const isNativeApp = typeof window !== 'undefined' && (
+      window.location.protocol === 'file:' || 
+      window.location.protocol === 'capacitor:' || 
+      !!(window as any).Capacitor?.isNativePlatform() ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1'
+    );
+
+    // 在 Web 页面端通过服务器代理转发消除 HTTPS 混合内容限制；打包 App 则直接直连
+    let finalWsUrl = targetWsUrl;
+    if (!isNativeApp && !targetWsUrl.includes('/api/funasr-ws')) {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host;
+      if (host && window.location.protocol.startsWith('http')) {
+        finalWsUrl = `${protocol}//${host}/api/funasr-ws?endpoint=${encodeURIComponent(targetWsUrl)}`;
+      }
+    }
+    
+    console.log('Connecting to FunASR WS:', finalWsUrl, isNativeApp ? '(Native Direct)' : '(Proxy)');
+    try {
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch (e) {}
+      }
+      const ws = new WebSocket(finalWsUrl, 'binary');
+      wsRef.current = ws;
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        console.log('FunASR WS connection established');
+        const config = {
+          mode: "2pass",
+          chunk_size: [5, 10, 5],
+          chunk_interval: 10,
+          audio_fs: 16000,
+          wav_name: "micro",
+          wav_format: "pcm",
+          is_speaking: true,
+          hotwords: "",
+          itn: true
+        };
+        try {
+          ws.send(JSON.stringify(config));
+        } catch (e) {
+          console.error("Failed to send config to WS:", e);
+        }
+
+        if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = setInterval(() => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            try {
+              const silenceBuffer = new Int16Array(160).buffer;
+              wsRef.current.send(silenceBuffer);
+            } catch (e) {
+              console.error("Failed to send WS heartbeat:", e);
+            }
+          }
+        }, 30000);
+        
+        if (statusRef.current === 'connecting') {
+          startAudioCapture();
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          if (statusRef.current !== 'listening' || Date.now() - lastTtsEndTimeRef.current < 1000) {
+            return;
+          }
+          const rawText = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+          console.log('[FunASR Response]:', rawText);
+          const data = JSON.parse(rawText);
+          const textVal = data?.text ?? data?.result ?? data?.preds ?? (Array.isArray(data) ? data[0]?.text : null);
+          if (typeof textVal === 'string') {
+            const transcript = textVal.trim();
+            if (transcript) {
+              setUserText(transcript);
+              userTextRef.current = transcript;
+              silenceTimeRef.current = 0;
+              hasSpokenRef.current = true;
+            }
+          }
+        } catch (err) {
+          console.error('Error parsing WS message:', err);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('FunASR WS Error:', err);
+        if (statusRef.current === 'connecting') {
+          setStatus('error');
+          setErrorMessage('FunASR 实时语音连接失败，请确认服务端已启动并且地址正确。');
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('FunASR WS closed');
+        if (statusRef.current === 'connecting') {
+          setStatus('error');
+          setErrorMessage('流式语音服务连接断开。');
+        }
+      };
+
+    } catch (e: any) {
+      console.error('WS Connection Exception:', e);
+      if (statusRef.current === 'connecting') {
+        setStatus('error');
+        setErrorMessage(`WS 连接建立失败: ${e.message || '未知错误'}`);
+      }
+    }
+  };
+
+  // 打断 AI 说话机制
+  const interruptAi = () => {
+    console.log('User or VAD interrupted AI speech');
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+
+    speechQueueRef.current = [];
+    currentUtteranceRef.current = null;
+    isSpeakingTtsRef.current = false;
+    if (ttsCleanTimerRef.current) clearTimeout(ttsCleanTimerRef.current);
+
+    lastTtsEndTimeRef.current = Date.now();
+    setStatus('listening');
+    setVolume(0);
+    setUserText('');
+    userTextRef.current = '';
+    silenceTimeRef.current = 0;
+    hasSpokenRef.current = false;
+
+    if (recognitionRef.current) {
+      try { recognitionRef.current.start(); } catch (e) {}
+    }
+
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      connectFunasrWs();
+    }
+  };
+
   const initCall = async () => {
     setStatus('connecting');
     setErrorMessage('');
@@ -104,120 +274,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     currentUtteranceRef.current = null;
     pendingTtsTextRef.current = '';
 
-    try {
-      // 1. 安全校验与初始化 FunASR WS
-      const rawEndpoint = settings?.funasrWsEndpoint || '';
-      if (!rawEndpoint.trim()) {
-        setStatus('error');
-        setErrorMessage('请先在“应用设置”中配置 FunASR 实时流式语音 WS 地址。');
-        return;
-      }
-
-      let targetWsUrl = rawEndpoint.trim();
-      if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
-        targetWsUrl = `ws://${targetWsUrl}`;
-      }
-
-      // 判断是否为打包 Native App 环境（如 Capacitor / Cordova / WebView / file: 协议）
-      const isNativeApp = typeof window !== 'undefined' && (
-        window.location.protocol === 'file:' || 
-        window.location.protocol === 'capacitor:' || 
-        !!(window as any).Capacitor?.isNativePlatform() ||
-        window.location.hostname === 'localhost' ||
-        window.location.hostname === '127.0.0.1'
-      );
-
-      // 在 Web 页面端通过服务器代理转发消除 HTTPS 混合内容限制；打包 App 则直接直连
-      let finalWsUrl = targetWsUrl;
-      if (!isNativeApp && !targetWsUrl.includes('/api/funasr-ws')) {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = window.location.host;
-        if (host && window.location.protocol.startsWith('http')) {
-          finalWsUrl = `${protocol}//${host}/api/funasr-ws?endpoint=${encodeURIComponent(targetWsUrl)}`;
-        }
-      }
-      
-      console.log('Connecting to FunASR WS:', finalWsUrl, isNativeApp ? '(Native Direct)' : '(Proxy)');
-      const ws = new WebSocket(finalWsUrl, 'binary');
-      wsRef.current = ws;
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        console.log('FunASR WS connection established');
-        // 发送初始化配置 JSON
-        const config = {
-          mode: "2pass",
-          chunk_size: [5, 10, 5],
-          chunk_interval: 10,
-          wav_name: "micro",
-          wav_format: "pcm",
-          is_speaking: true
-        };
-        try {
-          ws.send(JSON.stringify(config));
-        } catch (e) {
-          console.error("Failed to send config to WS:", e);
-        }
-
-        // 启动 30 秒心跳保活，防止 Cloudflare / 代理超时断开
-        if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
-        heartbeatTimerRef.current = setInterval(() => {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            try {
-              // 发送 320 字节 (160 采样) 静音 PCM 作为心跳保活
-              // 避免发送 mode: "heartbeat" 触发 FunASR 协议校验报错
-              const silenceBuffer = new Int16Array(160).buffer;
-              wsRef.current.send(silenceBuffer);
-            } catch (e) {
-              console.error("Failed to send WS heartbeat:", e);
-            }
-          }
-        }, 30000);
-        
-        // 2. 启动音频捕获
-        startAudioCapture();
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const rawText = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
-          const data = JSON.parse(rawText);
-          // FunASR 2pass 的回包结构 (text / result / preds)
-          const textVal = data?.text || data?.result || data?.preds;
-          if (typeof textVal === 'string') {
-            const transcript = textVal.trim();
-            if (transcript) {
-              setUserText(transcript);
-              userTextRef.current = transcript;
-              silenceTimeRef.current = 0; // 有新 ASR 说明在说话，重置静音检测
-              hasSpokenRef.current = true;
-            }
-          }
-        } catch (err) {
-          console.error('Error parsing WS message:', err);
-        }
-      };
-
-      ws.onerror = (err) => {
-        console.error('FunASR WS Error:', err);
-        setStatus('error');
-        setErrorMessage('FunASR 实时语音连接失败，请确认服务端已启动并且地址正确。');
-      };
-
-      ws.onclose = () => {
-        console.log('FunASR WS closed');
-        if (statusRef.current !== 'error' && statusRef.current !== 'connecting') {
-          // 非主动挂断或错误时被动断开
-          setStatus('error');
-          setErrorMessage('流式语音服务连接已断开。');
-        }
-      };
-
-    } catch (e: any) {
-      console.error('Call initialization failed', e);
-      setStatus('error');
-      setErrorMessage(`初始化通话失败: ${e.message || '未知错误'}`);
-    }
+    connectFunasrWs();
   };
 
   const startAudioCapture = async () => {
@@ -260,9 +317,6 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       setStatus('listening');
 
       processor.onaudioprocess = (e) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        if (statusRef.current !== 'listening') return; // 只有在“倾听”状态才将麦克风数据送去识别
-
         const inputData = e.inputBuffer.getChannelData(0);
 
         // 计算 RMS 能量（音量大小）
@@ -271,7 +325,26 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           sum += inputData[i] * inputData[i];
         }
         const rms = Math.sqrt(sum / inputData.length);
-        
+
+        // 打断检测：若 AI 正在播报且用户开口说话 (rms > 0.08)，自动打断 AI 播报
+        if (statusRef.current === 'speaking') {
+          if (rms > 0.08 && Date.now() - lastTtsEndTimeRef.current > 600) {
+            interruptAi();
+            return;
+          }
+          return;
+        }
+
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        if (statusRef.current !== 'listening') return; // 只有在“倾听”状态才将麦克风数据送去识别
+
+        // AI 刚播放完语音 1.2 秒内，处于扬声器回音消散保护期
+        if (Date.now() - lastTtsEndTimeRef.current < 1200) {
+          setVolume(0);
+          silenceTimeRef.current = 0;
+          return;
+        }
+
         // 实时音量波动动画
         setVolume(rms * 100);
 
@@ -301,6 +374,68 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         }
       };
 
+      // 3. 开启浏览器原生 SpeechRecognition 作为双引擎并行识听兜底
+      if (typeof window !== 'undefined') {
+        const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (SpeechRecognitionClass) {
+          try {
+            if (recognitionRef.current) {
+              try { recognitionRef.current.stop(); } catch (e) {}
+            }
+            const recognition = new SpeechRecognitionClass();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'zh-CN';
+
+            recognition.onresult = (event: any) => {
+              let text = '';
+              for (let i = event.resultIndex; i < event.results.length; i++) {
+                text += event.results[i][0].transcript;
+              }
+              const trimmed = text.trim();
+
+              // 如果 AI 正在播报，且识别出了用户开口说的新文本，直接打断 AI
+              if (statusRef.current === 'speaking' && trimmed && Date.now() - lastTtsEndTimeRef.current > 500) {
+                interruptAi();
+                setUserText(trimmed);
+                userTextRef.current = trimmed;
+                hasSpokenRef.current = true;
+                return;
+              }
+
+              if (statusRef.current !== 'listening') return;
+              if (Date.now() - lastTtsEndTimeRef.current < 1200) return; // 忽略 AI 播报回音
+
+              if (trimmed) {
+                setUserText(trimmed);
+                userTextRef.current = trimmed;
+                hasSpokenRef.current = true;
+              }
+            };
+
+            recognition.onend = () => {
+              // 处于倾听状态时自动重新 start，防止原生识别关闭后无法重新工作
+              if (statusRef.current === 'listening') {
+                setTimeout(() => {
+                  if (statusRef.current === 'listening') {
+                    try { recognition.start(); } catch (e) {}
+                  }
+                }, 300);
+              }
+            };
+
+            recognition.onerror = (e: any) => {
+              console.warn('Native SpeechRecognition error:', e);
+            };
+
+            recognition.start();
+            recognitionRef.current = recognition;
+          } catch (srErr) {
+            console.warn('Native SpeechRecognition start notice:', srErr);
+          }
+        }
+      }
+
     } catch (err: any) {
       console.error('Audio capture permission error:', err);
       setStatus('error');
@@ -309,25 +444,18 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   };
 
   const floatTo16BitPCM = (input: Float32Array, inputSampleRate: number): ArrayBuffer => {
-    // 自动重采样至 16000Hz (FunASR 标准采样率)
+    // 线性插值精确定良重采样至 16000Hz (FunASR 标准采样率)
     let samples = input;
     if (inputSampleRate && inputSampleRate !== 16000) {
       const ratio = inputSampleRate / 16000;
       const newLength = Math.round(input.length / ratio);
       const resampled = new Float32Array(newLength);
-      let offsetResult = 0;
-      let offsetBuffer = 0;
-      while (offsetResult < resampled.length) {
-        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-        let accum = 0;
-        let count = 0;
-        for (let i = offsetBuffer; i < nextOffsetBuffer && i < input.length; i++) {
-          accum += input[i];
-          count++;
-        }
-        resampled[offsetResult] = count > 0 ? accum / count : 0;
-        offsetResult++;
-        offsetBuffer = nextOffsetBuffer;
+      for (let i = 0; i < newLength; i++) {
+        const origIndex = i * ratio;
+        const index1 = Math.floor(origIndex);
+        const index2 = Math.min(index1 + 1, input.length - 1);
+        const fraction = origIndex - index1;
+        resampled[i] = input[index1] * (1 - fraction) + input[index2] * fraction;
       }
       samples = resampled;
     }
@@ -343,7 +471,13 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   const sendWsSpeakingStatus = (isSpeaking: boolean) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       try {
-        wsRef.current.send(JSON.stringify({ is_speaking: isSpeaking }));
+        wsRef.current.send(JSON.stringify({
+          mode: "2pass",
+          chunk_size: [5, 10, 5],
+          chunk_interval: 10,
+          audio_fs: 16000,
+          is_speaking: isSpeaking
+        }));
       } catch (e) {
         console.error('Error sending WS status:', e);
       }
@@ -356,10 +490,21 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
     console.log('User spoke complete sentence:', speechText);
     
-    // 1. 切换到思考状态
+    // 暂停识听，避免 AI 说话期间捕获扬声器声音
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+
+    // 1. 切换到思考状态，清空 ASR 记录
     setStatus('thinking');
     setVolume(0);
-    sendWsSpeakingStatus(false); // 停止倾听，避免干扰 ASR
+    setUserText('');
+    userTextRef.current = '';
+    hasSpokenRef.current = false;
+    silenceTimeRef.current = 0;
 
     // 2. 构造 User 消息并保存到 local 历史
     const userMessage: Message = {
@@ -455,12 +600,34 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       isSpeakingTtsRef.current = false;
       // 全部播放完毕后，如果大模型已经生成结束，重置为 listening 状态
       if (aiGeneratingDoneRef.current) {
-        // 短暂延迟后切换为 listening，给用户一个完美的过渡体验
+        lastTtsEndTimeRef.current = Date.now(); // 记录发声结束点，开启回音保护
+
         if (ttsCleanTimerRef.current) clearTimeout(ttsCleanTimerRef.current);
         ttsCleanTimerRef.current = setTimeout(() => {
           setStatus('listening');
           setVolume(0);
-          sendWsSpeakingStatus(true); // 重新启用流式 ASR 倾听
+          setUserText('');
+          userTextRef.current = '';
+          silenceTimeRef.current = 0;
+          hasSpokenRef.current = false;
+          
+          // 重新拉起识听
+          if (recognitionRef.current) {
+            try { recognitionRef.current.start(); } catch (e) {}
+          }
+
+          // 检查并确保 FunASR WS 在新一轮对话开启时处于连接可用状态
+          if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            console.log('Re-establishing FunASR WS connection for next turn...');
+            const rawEndpoint = settings?.funasrWsEndpoint || '';
+            if (rawEndpoint.trim()) {
+              let targetWsUrl = rawEndpoint.trim();
+              if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
+                targetWsUrl = `ws://${targetWsUrl}`;
+              }
+              connectFunasrWs(targetWsUrl);
+            }
+          }
         }, 800);
       }
       return;
@@ -478,13 +645,29 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
     if (typeof window === 'undefined' || !('speechSynthesis' in window) || !window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') {
       console.warn('SpeechSynthesis is not supported on this device/app platform.');
-      // 如果设备不支持语音合成，给 1.5 秒动画缓冲后切回 listening，防止流程卡死
       if (ttsCleanTimerRef.current) clearTimeout(ttsCleanTimerRef.current);
       ttsCleanTimerRef.current = setTimeout(() => {
+        lastTtsEndTimeRef.current = Date.now();
         setStatus('listening');
         setVolume(0);
-        sendWsSpeakingStatus(true);
-      }, 1500);
+        setUserText('');
+        userTextRef.current = '';
+        silenceTimeRef.current = 0;
+        hasSpokenRef.current = false;
+        if (recognitionRef.current) {
+          try { recognitionRef.current.start(); } catch (e) {}
+        }
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          const rawEndpoint = settings?.funasrWsEndpoint || '';
+          if (rawEndpoint.trim()) {
+            let targetWsUrl = rawEndpoint.trim();
+            if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
+              targetWsUrl = `ws://${targetWsUrl}`;
+            }
+            connectFunasrWs(targetWsUrl);
+          }
+        }
+      }, 1200);
       return;
     }
 
@@ -508,6 +691,12 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
       utterance.onstart = () => {
         setStatus('speaking');
+        if (aiScrollRef.current) {
+          aiScrollRef.current.scrollTo({
+            top: aiScrollRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
       };
 
       utterance.onend = () => {
@@ -536,6 +725,10 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   };
 
   const cleanupCall = () => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
+      recognitionRef.current = null;
+    }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
       try {
         window.speechSynthesis.cancel();
@@ -617,6 +810,28 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               {status === 'speaking' && '正在播放语音...'}
               {status === 'error' && '语音连接错误'}
             </span>
+
+            {/* 实时麦克风音量可视化动态小能量柱 */}
+            {status === 'listening' && (
+              <div className="flex items-center gap-0.5 ml-2 h-4 px-1.5 py-0.5 rounded bg-white/5 border border-white/10" title="麦克风采集音量">
+                <span className="text-[10px] text-emerald-400 font-mono mr-1">MIC</span>
+                {[0.2, 0.4, 0.6, 0.8, 1.0].map((threshold, idx) => {
+                  const active = (volume / 100) >= (threshold * 0.2);
+                  return (
+                    <span
+                      key={idx}
+                      className={cn(
+                        "w-1 rounded-full transition-all duration-75",
+                        active ? "bg-emerald-400" : "bg-white/20"
+                      )}
+                      style={{
+                        height: active ? `${Math.min(100, Math.max(30, (volume / 100) * 100 * (idx + 1) * 0.4))}%` : '20%'
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            )}
           </div>
           
           {status !== 'error' && status !== 'connecting' && (
@@ -726,9 +941,14 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
               {/* AI text (Real-time LLM) */}
               <div className="space-y-1">
                 <span className="text-[10px] font-mono text-sky-400 uppercase tracking-widest font-semibold">{settings.aiName || 'AI'}</span>
-                <p className="text-sm text-white/70 leading-relaxed line-clamp-3 min-h-[3.75rem]">
-                  {aiText || (status === 'thinking' ? '正在思考中...' : ' ')}
-                </p>
+                <div 
+                  ref={aiScrollRef}
+                  className="max-h-[160px] sm:max-h-[220px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent pr-1.5 smooth-scroll"
+                >
+                  <p className="text-sm text-white/80 leading-relaxed whitespace-pre-wrap break-words min-h-[3.75rem]">
+                    {aiText || (status === 'thinking' ? '正在思考中...' : ' ')}
+                  </p>
+                </div>
               </div>
             </>
           )}
@@ -736,6 +956,19 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
         {/* Control bar */}
         <div className="w-full max-w-md flex items-center justify-center gap-6 pb-6">
+          {(status === 'speaking' || status === 'thinking') && (
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-12 px-5 rounded-full bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 shadow-lg flex items-center gap-2 transition-all active:scale-95 animate-pulse"
+              onClick={interruptAi}
+              title="打断 AI 说话，切换回倾听"
+            >
+              <Zap size={18} className="fill-amber-300/30" />
+              <span className="text-xs font-medium">打断 AI</span>
+            </Button>
+          )}
+
           {status === 'listening' && (
             <Button
               type="button"
