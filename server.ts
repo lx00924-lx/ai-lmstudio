@@ -386,19 +386,16 @@ async function startServer() {
       console.log(`[FunASR WS Proxy] Proxying WebSocket connection to target: ${targetEndpoint}`);
 
       const rawSubprotocol = request.headers['sec-websocket-protocol'];
-      let protocols: string[] = ['binary'];
+      let protocols: string[] | undefined = undefined;
       if (rawSubprotocol) {
         const parsed = rawSubprotocol.split(',').map((s) => s.trim()).filter(Boolean);
         if (parsed.length > 0) {
           protocols = parsed;
-          if (!protocols.includes('binary')) {
-            protocols.push('binary');
-          }
         }
       }
 
       console.log(`[FunASR WS Proxy] Connecting to target WS: ${targetEndpoint} with protocols:`, protocols);
-      const targetWs = new WSWebSocket(targetEndpoint, protocols);
+      const targetWs = protocols ? new WSWebSocket(targetEndpoint, protocols) : new WSWebSocket(targetEndpoint);
       const pendingBuffer: any[] = [];
 
       targetWs.on("open", () => {
