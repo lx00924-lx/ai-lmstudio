@@ -14,19 +14,81 @@ const USERS_FILE = path.join(process.cwd(), "messages_data", "users.json");
 const SETTINGS_FILE = path.join(process.cwd(), "messages_data", "settings.json");
 const UPLOADS_DIR = path.join(process.cwd(), "messages_media");
 
-// Ensure directories exist
+// File lock mechanism to prevent race conditions during concurrent JSON writes
+const fileLocks: Map<string, Promise<any>> = new Map();
+
+async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const currentLock = fileLocks.get(filePath) || Promise.resolve();
+  let release: () => void = () => {};
+  const nextLock = new Promise<void>((resolve) => { release = resolve; });
+  fileLocks.set(filePath, currentLock.then(() => nextLock));
+
+  try {
+    await currentLock;
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+// Atomic file write using a temporary file and rename
+async function safeWriteJSON(filePath: string, data: any): Promise<void> {
+  const tempPath = `${filePath}.tmp.${Math.random().toString(36).substring(2, 9)}`;
+  const content = JSON.stringify(data, null, 2);
+  await fs.writeFile(tempPath, content, "utf-8");
+  await fs.rename(tempPath, filePath);
+}
+
+// Robust JSON reader with auto-recovery for corrupted JSON files
+async function safeReadJSON<T>(filePath: string, fallback: T): Promise<T> {
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const trimmed = raw.trim();
+    if (!trimmed) return fallback;
+    return JSON.parse(trimmed) as T;
+  } catch (error) {
+    console.error(`[JSON Read Error] Failed to parse ${filePath}:`, error);
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      const firstBrace = raw.indexOf('{');
+      const lastBrace = raw.lastIndexOf('}');
+      const firstBracket = raw.indexOf('[');
+      const lastBracket = raw.lastIndexOf(']');
+
+      let candidate = '';
+      if (firstBracket !== -1 && lastBracket > firstBracket) {
+        candidate = raw.substring(firstBracket, lastBracket + 1);
+      } else if (firstBrace !== -1 && lastBrace > firstBrace) {
+        candidate = raw.substring(firstBrace, lastBrace + 1);
+      }
+
+      if (candidate) {
+        const parsed = JSON.parse(candidate);
+        console.log(`[JSON Recovery] Recovered clean JSON for ${filePath}`);
+        await safeWriteJSON(filePath, parsed);
+        return parsed as T;
+      }
+    } catch (recoveryErr) {
+      console.error(`[JSON Recovery Failed] Backing up corrupted file ${filePath}`);
+      try {
+        await fs.writeFile(`${filePath}.corrupted.${Date.now()}`, await fs.readFile(filePath));
+        await safeWriteJSON(filePath, fallback);
+      } catch (e) {
+        console.error("Failed to write fallback file:", e);
+      }
+    }
+    return fallback;
+  }
+}
+
+// Ensure directories and files exist
 async function ensureDirs() {
   try {
     await fs.mkdir(path.dirname(MESSAGES_FILE), { recursive: true });
     await fs.mkdir(UPLOADS_DIR, { recursive: true });
     
     const checkFile = async (filePath: string, defaultContent: any) => {
-      try {
-        const stats = await fs.stat(filePath);
-        if (stats.size === 0) throw new Error("File empty");
-      } catch {
-        await fs.writeFile(filePath, JSON.stringify(defaultContent));
-      }
+      await safeReadJSON(filePath, defaultContent);
     };
 
     await checkFile(MESSAGES_FILE, {}); // Map of userId -> messages[]
@@ -71,16 +133,28 @@ async function startServer() {
     const { username, password } = req.body;
     console.log(`Registration attempt for username: ${username}`);
     try {
-      const users = JSON.parse(await fs.readFile(USERS_FILE, "utf-8"));
-      if (users.find((u: any) => u.username === username)) {
-        console.log(`Registration failed: user already exists: ${username}`);
-        return res.status(400).json({ error: "User already exists" });
+      let registeredUser: any = null;
+      let errorMsg = "";
+
+      await withFileLock(USERS_FILE, async () => {
+        const users = await safeReadJSON<any[]>(USERS_FILE, []);
+        if (users.find((u: any) => u.username === username)) {
+          errorMsg = "User already exists";
+          return;
+        }
+        const newUser = { id: Date.now().toString(), username, password };
+        users.push(newUser);
+        await safeWriteJSON(USERS_FILE, users);
+        registeredUser = newUser;
+      });
+
+      if (errorMsg) {
+        console.log(`Registration failed: ${errorMsg} for ${username}`);
+        return res.status(400).json({ error: errorMsg });
       }
-      const newUser = { id: Date.now().toString(), username, password };
-      users.push(newUser);
-      await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+
       console.log(`Registration successful for username: ${username}`);
-      res.json({ user: { id: newUser.id, username: newUser.username } });
+      res.json({ user: { id: registeredUser.id, username: registeredUser.username } });
     } catch (e) {
       console.error(`Registration error for ${username}:`, e);
       res.status(500).json({ error: "Registration failed" });
@@ -94,15 +168,7 @@ async function startServer() {
     const { username, password } = req.body;
     console.log(`Login attempt for username: ${username}`);
     try {
-      const usersContent = await fs.readFile(USERS_FILE, "utf-8");
-      let users = [];
-      try {
-        users = usersContent.trim() ? JSON.parse(usersContent) : [];
-      } catch (e) {
-        console.error("Error parsing users file:", e);
-        return res.status(500).json({ error: "Internal server error: User data corruption" });
-      }
-      
+      const users = await safeReadJSON<any[]>(USERS_FILE, []);
       const user = users.find((u: any) => u.username === username);
       
       if (!user) {
@@ -126,7 +192,7 @@ async function startServer() {
   // REST API for messages (Per user)
   app.get("/api/messages/:userId", async (req, res) => {
     try {
-      const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
+      const allMessages = await safeReadJSON<Record<string, any[]>>(MESSAGES_FILE, {});
       res.json(allMessages[req.params.userId] || []);
     } catch (error) {
       res.status(500).json({ error: "Failed to load messages" });
@@ -136,13 +202,15 @@ async function startServer() {
   app.post("/api/sync-messages", async (req, res) => {
     const { userId, messages } = req.body;
     try {
-      const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
-      if (!allMessages[userId]) allMessages[userId] = [];
-      // Combine existing with synced, avoiding duplicates based on ID
-      const newMessages = [...allMessages[userId], ...messages];
-      const uniqueMessages = Array.from(new Map(newMessages.map(m => [m.id, m])).values());
-      allMessages[userId] = uniqueMessages;
-      await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
+      await withFileLock(MESSAGES_FILE, async () => {
+        const allMessages = await safeReadJSON<Record<string, any[]>>(MESSAGES_FILE, {});
+        if (!allMessages[userId]) allMessages[userId] = [];
+        // Combine existing with synced, avoiding duplicates based on ID
+        const newMessages = [...allMessages[userId], ...messages];
+        const uniqueMessages = Array.from(new Map(newMessages.map(m => [m.id, m])).values());
+        allMessages[userId] = uniqueMessages;
+        await safeWriteJSON(MESSAGES_FILE, allMessages);
+      });
       res.json({ success: true });
     } catch (error) {
       console.error("Sync messages error:", error);
@@ -153,7 +221,7 @@ async function startServer() {
   // Settings API
   app.get("/api/settings/:userId", async (req, res) => {
     try {
-      const allSettings = JSON.parse(await fs.readFile(SETTINGS_FILE, "utf-8"));
+      const allSettings = await safeReadJSON<Record<string, any>>(SETTINGS_FILE, {});
       res.json(allSettings[req.params.userId] || {});
     } catch (error) {
       res.status(500).json({ error: "Failed to load settings" });
@@ -163,13 +231,23 @@ async function startServer() {
   app.post("/api/change-password", async (req, res) => {
     const { userId, oldPassword, newPassword } = req.body;
     try {
-      const users = JSON.parse(await fs.readFile(USERS_FILE, "utf-8"));
-      const userIndex = users.findIndex((u: any) => u.id === userId && u.password === oldPassword);
-      if (userIndex === -1) {
-        return res.status(401).json({ error: "原密码错误" });
+      let success = false;
+      let errorMsg = "";
+      await withFileLock(USERS_FILE, async () => {
+        const users = await safeReadJSON<any[]>(USERS_FILE, []);
+        const userIndex = users.findIndex((u: any) => u.id === userId && u.password === oldPassword);
+        if (userIndex === -1) {
+          errorMsg = "原密码错误";
+          return;
+        }
+        users[userIndex].password = newPassword;
+        await safeWriteJSON(USERS_FILE, users);
+        success = true;
+      });
+
+      if (!success) {
+        return res.status(401).json({ error: errorMsg || "修改失败" });
       }
-      users[userIndex].password = newPassword;
-      await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: "服务器错误" });
@@ -307,7 +385,12 @@ async function startServer() {
 
       console.log(`[FunASR WS Proxy] Proxying WebSocket connection to target: ${targetEndpoint}`);
 
-      const targetWs = new WSWebSocket(targetEndpoint);
+      const clientSubprotocol = request.headers['sec-websocket-protocol'];
+      const protocols = clientSubprotocol
+        ? clientSubprotocol.split(',').map((s) => s.trim())
+        : undefined;
+
+      const targetWs = protocols ? new WSWebSocket(targetEndpoint, protocols) : new WSWebSocket(targetEndpoint);
       const pendingBuffer: any[] = [];
 
       targetWs.on("open", () => {
@@ -331,8 +414,31 @@ async function startServer() {
         }
       });
 
+      // 每 45 秒发送 ping 帧，防止 Cloudflare / 代理层超时断开
+      const heartbeatInterval = setInterval(() => {
+        if (clientWs.readyState === WSWebSocket.OPEN) {
+          try {
+            clientWs.ping();
+          } catch (pingErr) {
+            console.error("[FunASR WS Proxy] Client ping error:", pingErr);
+          }
+        }
+        if (targetWs.readyState === WSWebSocket.OPEN) {
+          try {
+            targetWs.ping();
+          } catch (pingErr) {
+            console.error("[FunASR WS Proxy] Target ping error:", pingErr);
+          }
+        }
+      }, 45000);
+
+      const cleanupProxy = () => {
+        clearInterval(heartbeatInterval);
+      };
+
       targetWs.on("close", (code, reason) => {
         console.log(`[FunASR WS Proxy] Target WS closed: ${code}`);
+        cleanupProxy();
         if (clientWs.readyState === WSWebSocket.OPEN) {
           clientWs.close(code, reason);
         }
@@ -348,6 +454,7 @@ async function startServer() {
 
       clientWs.on("error", (err) => {
         console.error("[FunASR WS Proxy] Client WS error:", err.message);
+        cleanupProxy();
         if (targetWs.readyState === WSWebSocket.OPEN || targetWs.readyState === WSWebSocket.CONNECTING) {
           targetWs.close();
         }
@@ -355,6 +462,7 @@ async function startServer() {
 
       clientWs.on("close", () => {
         console.log("[FunASR WS Proxy] Client WS connection closed");
+        cleanupProxy();
         if (targetWs.readyState === WSWebSocket.OPEN || targetWs.readyState === WSWebSocket.CONNECTING) {
           targetWs.close();
         }
@@ -378,10 +486,12 @@ async function startServer() {
     socket.on("send_message", async ({ userId, message }) => {
       try {
         if (userId !== "guest") { // Only store for non-guests
-          const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
-          if (!allMessages[userId]) allMessages[userId] = [];
-          allMessages[userId].push(message);
-          await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
+          await withFileLock(MESSAGES_FILE, async () => {
+            const allMessages = await safeReadJSON<Record<string, any[]>>(MESSAGES_FILE, {});
+            if (!allMessages[userId]) allMessages[userId] = [];
+            allMessages[userId].push(message);
+            await safeWriteJSON(MESSAGES_FILE, allMessages);
+          });
         }
         
         // Still broadcast for real-time
@@ -393,11 +503,13 @@ async function startServer() {
 
     socket.on("delete_message", async ({ userId, messageId }) => {
       try {
-        const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
-        if (allMessages[userId]) {
-          allMessages[userId] = allMessages[userId].filter((m: any) => m.id !== messageId);
-          await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
-        }
+        await withFileLock(MESSAGES_FILE, async () => {
+          const allMessages = await safeReadJSON<Record<string, any[]>>(MESSAGES_FILE, {});
+          if (allMessages[userId]) {
+            allMessages[userId] = allMessages[userId].filter((m: any) => m.id !== messageId);
+            await safeWriteJSON(MESSAGES_FILE, allMessages);
+          }
+        });
         io.to(`user_${userId}`).emit("message_deleted", messageId);
       } catch (error) {
         console.error("Socket error deleting message:", error);
@@ -407,35 +519,40 @@ async function startServer() {
     socket.on("delete_messages_range", async ({ userId, range }) => {
       console.log(`[Socket] Received delete_messages_range for userId: ${userId}, range: ${range}`);
       try {
-        const allMessages = JSON.parse(await fs.readFile(MESSAGES_FILE, "utf-8"));
-        if (!allMessages[userId]) {
-          console.log(`[Socket] No messages found for user: ${userId}`);
-          return;
-        }
+        let updatedUserMessages: any[] = [];
+        await withFileLock(MESSAGES_FILE, async () => {
+          const allMessages = await safeReadJSON<Record<string, any[]>>(MESSAGES_FILE, {});
+          if (!allMessages[userId]) {
+            console.log(`[Socket] No messages found for user: ${userId}`);
+            return;
+          }
 
-        // Logic for filtering
-        let messages = allMessages[userId];
-        const firstMessage = messages[0];
-        
-        if (range === 'all') {
-          console.log(`[Socket] Deleting all messages for user: ${userId}`);
-          allMessages[userId] = firstMessage?.role === 'assistant' ? [firstMessage] : [];
-        } else {
-          const days = range as number;
-          console.log(`[Socket] Deleting messages older than ${days} days for user: ${userId}`);
-          const cutoff = new Date();
-          cutoff.setDate(cutoff.getDate() - days);
-          cutoff.setHours(0, 0, 0, 0);
+          // Logic for filtering
+          let messages = allMessages[userId];
+          const firstMessage = messages[0];
           
-          allMessages[userId] = messages.filter((m: any, index: number) => {
-            if (index === 0 && m.role === 'assistant') return true;
-            return new Date(m.timestamp) >= cutoff; // Keeps messages within the range
-          });
-        }
-        
-        await fs.writeFile(MESSAGES_FILE, JSON.stringify(allMessages, null, 2));
+          if (range === 'all') {
+            console.log(`[Socket] Deleting all messages for user: ${userId}`);
+            allMessages[userId] = firstMessage?.role === 'assistant' ? [firstMessage] : [];
+          } else {
+            const days = range as number;
+            console.log(`[Socket] Deleting messages older than ${days} days for user: ${userId}`);
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - days);
+            cutoff.setHours(0, 0, 0, 0);
+            
+            allMessages[userId] = messages.filter((m: any, index: number) => {
+              if (index === 0 && m.role === 'assistant') return true;
+              return new Date(m.timestamp) >= cutoff; // Keeps messages within the range
+            });
+          }
+          
+          await safeWriteJSON(MESSAGES_FILE, allMessages);
+          updatedUserMessages = allMessages[userId];
+        });
+
         console.log(`[Socket] Messages updated for user: ${userId}`);
-        io.to(`user_${userId}`).emit("messages_updated", allMessages[userId]);
+        io.to(`user_${userId}`).emit("messages_updated", updatedUserMessages);
       } catch (error) {
         console.error("Socket error deleting messages range:", error);
       }
@@ -443,9 +560,11 @@ async function startServer() {
 
     socket.on("update_settings", async ({ userId, settings }) => {
       try {
-        const allSettings = JSON.parse(await fs.readFile(SETTINGS_FILE, "utf-8"));
-        allSettings[userId] = settings;
-        await fs.writeFile(SETTINGS_FILE, JSON.stringify(allSettings, null, 2));
+        await withFileLock(SETTINGS_FILE, async () => {
+          const allSettings = await safeReadJSON<Record<string, any>>(SETTINGS_FILE, {});
+          allSettings[userId] = settings;
+          await safeWriteJSON(SETTINGS_FILE, allSettings);
+        });
         io.to(`user_${userId}`).emit("settings_updated", settings);
       } catch (error) {
         console.error("Socket error saving settings:", error);

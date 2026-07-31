@@ -5,8 +5,9 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { Message, AppSettings } from "../types";
-import { CapacitorHttp } from '@capacitor/core';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { estimateTokens } from "../lib/utils";
+import { API_BASE_URL } from "../config";
 
 // Helper to sanitize API endpoint
 function sanitizeEndpoint(endpoint: string): string {
@@ -295,7 +296,8 @@ export async function transcribeAudio(mediaUrl: string, endpoint: string): Promi
     const formData = new FormData();
     formData.append('file', blob, 'audio.wav');
     
-    const proxyUrl = `/api/funasr-transcribe?endpoint=${encodeURIComponent(endpoint)}`;
+    const baseUrl = Capacitor.isNativePlatform() ? API_BASE_URL : '';
+    const proxyUrl = `${baseUrl}/api/funasr-transcribe?endpoint=${encodeURIComponent(endpoint)}`;
     const response = await fetch(proxyUrl, {
       method: 'POST',
       body: formData,

@@ -12,7 +12,7 @@ export function useVoiceRecorder() {
 
   useEffect(() => {
     // Request permissions on mount
-    VoiceRecorder.requestAudioRecordingPermission();
+    VoiceRecorder.requestAudioRecordingPermission().catch(() => {});
   }, []);
 
   const startRecording = useCallback(async () => {
@@ -62,9 +62,9 @@ export function useVoiceRecorder() {
       // Emergency stop on unmount
       VoiceRecorder.getCurrentStatus().then(({ status }) => {
         if (status === 'RECORDING') {
-          VoiceRecorder.stopRecording();
+          VoiceRecorder.stopRecording().catch(() => {});
         }
-      });
+      }).catch(() => {});
     };
   }, []);
 

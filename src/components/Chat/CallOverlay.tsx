@@ -58,6 +58,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const pendingTtsTextRef = useRef('');
   const ttsCleanTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Sync status ref
   useEffect(() => {
@@ -90,32 +91,54 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     newMessagesRef.current = [];
     localMessagesRef.current = [...historyMessages];
     
-    // 初始化 TTS
-    window.speechSynthesis.cancel();
+    // 安全初始化 TTS
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {
+        console.error('Error canceling speechSynthesis:', e);
+      }
+    }
     speechQueueRef.current = [];
     isSpeakingTtsRef.current = false;
     currentUtteranceRef.current = null;
     pendingTtsTextRef.current = '';
 
     try {
-      // 1. 初始化 FunASR WS
-      let targetWsUrl = settings.funasrWsEndpoint!.trim();
+      // 1. 安全校验与初始化 FunASR WS
+      const rawEndpoint = settings?.funasrWsEndpoint || '';
+      if (!rawEndpoint.trim()) {
+        setStatus('error');
+        setErrorMessage('请先在“应用设置”中配置 FunASR 实时流式语音 WS 地址。');
+        return;
+      }
+
+      let targetWsUrl = rawEndpoint.trim();
       if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
         targetWsUrl = `ws://${targetWsUrl}`;
       }
 
-      // 如果未包含代理路径，则通过服务器的 /api/funasr-ws 端点代理转发，以消除跨域和 HTTPS 混合内容限制
+      // 判断是否为打包 Native App 环境（如 Capacitor / Cordova / WebView / file: 协议）
+      const isNativeApp = typeof window !== 'undefined' && (
+        window.location.protocol === 'file:' || 
+        window.location.protocol === 'capacitor:' || 
+        !!(window as any).Capacitor?.isNativePlatform() ||
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1'
+      );
+
+      // 在 Web 页面端通过服务器代理转发消除 HTTPS 混合内容限制；打包 App 则直接直连
       let finalWsUrl = targetWsUrl;
-      if (!targetWsUrl.includes('/api/funasr-ws')) {
+      if (!isNativeApp && !targetWsUrl.includes('/api/funasr-ws')) {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = window.location.host;
-        if (host) {
+        if (host && window.location.protocol.startsWith('http')) {
           finalWsUrl = `${protocol}//${host}/api/funasr-ws?endpoint=${encodeURIComponent(targetWsUrl)}`;
         }
       }
       
-      console.log('Connecting to FunASR WS (via proxy):', finalWsUrl);
-      const ws = new WebSocket(finalWsUrl);
+      console.log('Connecting to FunASR WS:', finalWsUrl, isNativeApp ? '(Native Direct)' : '(Proxy)');
+      const ws = new WebSocket(finalWsUrl, 'binary');
       wsRef.current = ws;
       ws.binaryType = 'arraybuffer';
 
@@ -130,7 +153,23 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           wav_format: "pcm",
           is_speaking: true
         };
-        ws.send(JSON.stringify(config));
+        try {
+          ws.send(JSON.stringify(config));
+        } catch (e) {
+          console.error("Failed to send config to WS:", e);
+        }
+
+        // 启动 45 秒心跳保活，防止 Cloudflare / 代理超时断开
+        if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
+        heartbeatTimerRef.current = setInterval(() => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            try {
+              wsRef.current.send(JSON.stringify({ is_speaking: false, mode: "heartbeat" }));
+            } catch (e) {
+              console.error("Failed to send WS heartbeat:", e);
+            }
+          }
+        }, 45000);
         
         // 2. 启动音频捕获
         startAudioCapture();
@@ -181,7 +220,22 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      let audioCtx: AudioContext;
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      try {
+        audioCtx = new AudioCtxClass({ sampleRate: 16000 });
+      } catch (e) {
+        console.warn('AudioContext sampleRate 16000 not supported by device, falling back to default:', e);
+        audioCtx = new AudioCtxClass();
+      }
+      
+      if (audioCtx.state === 'suspended') {
+        try {
+          await audioCtx.resume();
+        } catch (e) {
+          console.warn('AudioContext resume error:', e);
+        }
+      }
       audioContextRef.current = audioCtx;
 
       const source = audioCtx.createMediaStreamSource(stream);
@@ -232,9 +286,13 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         }
 
         // 转为 16位有符号 PCM 并发送
-        if (!isMuted) {
-          const buffer = floatTo16BitPCM(inputData);
-          wsRef.current.send(buffer);
+        if (!isMuted && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          try {
+            const buffer = floatTo16BitPCM(inputData);
+            wsRef.current.send(buffer);
+          } catch (sendErr) {
+            console.error('Error sending audio frame via WS:', sendErr);
+          }
         }
       };
 
@@ -390,35 +448,56 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = 'zh-CN';
-    utterance.rate = 1.15; // 稍快语速提高灵动感
-    
-    // 设置发音人
-    const voices = window.speechSynthesis.getVoices();
-    const zhVoice = voices.find(v => v.lang.includes('zh') || v.lang.includes('ZH'));
-    if (zhVoice) {
-      utterance.voice = zhVoice;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || !window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') {
+      console.warn('SpeechSynthesis is not supported on this device/app platform.');
+      // 如果设备不支持语音合成，给 1.5 秒动画缓冲后切回 listening，防止流程卡死
+      if (ttsCleanTimerRef.current) clearTimeout(ttsCleanTimerRef.current);
+      ttsCleanTimerRef.current = setTimeout(() => {
+        setStatus('listening');
+        setVolume(0);
+        sendWsSpeakingStatus(true);
+      }, 1500);
+      return;
     }
 
-    currentUtteranceRef.current = utterance;
+    try {
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = 'zh-CN';
+      utterance.rate = 1.15; // 稍快语速提高灵动感
+      
+      // 设置发音人
+      let voices: SpeechSynthesisVoice[] = [];
+      try {
+        voices = window.speechSynthesis.getVoices() || [];
+      } catch (e) {}
+      
+      const zhVoice = voices.find(v => v.lang.includes('zh') || v.lang.includes('ZH'));
+      if (zhVoice) {
+        utterance.voice = zhVoice;
+      }
 
-    utterance.onstart = () => {
-      setStatus('speaking');
-    };
+      currentUtteranceRef.current = utterance;
 
-    utterance.onend = () => {
-      currentUtteranceRef.current = null;
+      utterance.onstart = () => {
+        setStatus('speaking');
+      };
+
+      utterance.onend = () => {
+        currentUtteranceRef.current = null;
+        speakNextInQueue();
+      };
+
+      utterance.onerror = (e) => {
+        console.error('SpeechSynthesis error:', e);
+        currentUtteranceRef.current = null;
+        speakNextInQueue();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } catch (synthErr) {
+      console.error('Failed to trigger speechSynthesis speak:', synthErr);
       speakNextInQueue();
-    };
-
-    utterance.onerror = (e) => {
-      console.error('SpeechSynthesis error:', e);
-      currentUtteranceRef.current = null;
-      speakNextInQueue();
-    };
-
-    window.speechSynthesis.speak(utterance);
+    }
   };
 
   const handleHangup = () => {
@@ -429,8 +508,16 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   };
 
   const cleanupCall = () => {
-    window.speechSynthesis.cancel();
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {}
+    }
     if (ttsCleanTimerRef.current) clearTimeout(ttsCleanTimerRef.current);
+    if (heartbeatTimerRef.current) {
+      clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
     
     // 停止 WS
     if (wsRef.current) {
