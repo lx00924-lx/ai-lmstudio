@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { PhoneOff, Mic, MicOff, Volume2, Loader2, RefreshCw } from 'lucide-react';
+import { PhoneOff, Mic, MicOff, Volume2, Loader2, RefreshCw, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppSettings, Message } from '../../types';
 import { sendMessageToGemini } from '../../services/gemini';
@@ -159,17 +159,20 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           console.error("Failed to send config to WS:", e);
         }
 
-        // 启动 45 秒心跳保活，防止 Cloudflare / 代理超时断开
+        // 启动 30 秒心跳保活，防止 Cloudflare / 代理超时断开
         if (heartbeatTimerRef.current) clearInterval(heartbeatTimerRef.current);
         heartbeatTimerRef.current = setInterval(() => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             try {
-              wsRef.current.send(JSON.stringify({ is_speaking: false, mode: "heartbeat" }));
+              // 发送 320 字节 (160 采样) 静音 PCM 作为心跳保活
+              // 避免发送 mode: "heartbeat" 触发 FunASR 协议校验报错
+              const silenceBuffer = new Int16Array(160).buffer;
+              wsRef.current.send(silenceBuffer);
             } catch (e) {
               console.error("Failed to send WS heartbeat:", e);
             }
           }
-        }, 45000);
+        }, 30000);
         
         // 2. 启动音频捕获
         startAudioCapture();
@@ -177,10 +180,12 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          // FunASR 2pass 的通常回包结构包含 text 字段
-          if (data && typeof data.text === 'string') {
-            const transcript = data.text.trim();
+          const rawText = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+          const data = JSON.parse(rawText);
+          // FunASR 2pass 的回包结构 (text / result / preds)
+          const textVal = data?.text || data?.result || data?.preds;
+          if (typeof textVal === 'string') {
+            const transcript = textVal.trim();
             if (transcript) {
               setUserText(transcript);
               userTextRef.current = transcript;
@@ -285,10 +290,10 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           triggerAISpeak();
         }
 
-        // 转为 16位有符号 PCM 并发送
+        // 转为 16位有符号 PCM 并发送 (含 16000Hz 重采样)
         if (!isMuted && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           try {
-            const buffer = floatTo16BitPCM(inputData);
+            const buffer = floatTo16BitPCM(inputData, e.inputBuffer.sampleRate);
             wsRef.current.send(buffer);
           } catch (sendErr) {
             console.error('Error sending audio frame via WS:', sendErr);
@@ -303,10 +308,33 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     }
   };
 
-  const floatTo16BitPCM = (input: Float32Array): ArrayBuffer => {
-    const output = new Int16Array(input.length);
-    for (let i = 0; i < input.length; i++) {
-      const s = Math.max(-1, Math.min(1, input[i]));
+  const floatTo16BitPCM = (input: Float32Array, inputSampleRate: number): ArrayBuffer => {
+    // 自动重采样至 16000Hz (FunASR 标准采样率)
+    let samples = input;
+    if (inputSampleRate && inputSampleRate !== 16000) {
+      const ratio = inputSampleRate / 16000;
+      const newLength = Math.round(input.length / ratio);
+      const resampled = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < resampled.length) {
+        const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+        let accum = 0;
+        let count = 0;
+        for (let i = offsetBuffer; i < nextOffsetBuffer && i < input.length; i++) {
+          accum += input[i];
+          count++;
+        }
+        resampled[offsetResult] = count > 0 ? accum / count : 0;
+        offsetResult++;
+        offsetBuffer = nextOffsetBuffer;
+      }
+      samples = resampled;
+    }
+
+    const output = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
       output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
     return output.buffer;
@@ -707,12 +735,37 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         </div>
 
         {/* Control bar */}
-        <div className="w-full max-w-md flex justify-center pb-6">
+        <div className="w-full max-w-md flex items-center justify-center gap-6 pb-6">
+          {status === 'listening' && (
+            <Button
+              type="button"
+              variant="secondary"
+              className={cn(
+                "h-12 px-5 rounded-full bg-white/10 hover:bg-white/20 text-white border border-white/20 shadow-lg flex items-center gap-2 transition-all active:scale-95",
+                userText && "bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/40 text-emerald-300"
+              )}
+              onClick={() => {
+                if (userTextRef.current.trim()) {
+                  triggerAISpeak();
+                } else {
+                  // 如果未识别出文本，允许强行提示
+                  setUserText('你好');
+                  userTextRef.current = '你好';
+                  triggerAISpeak();
+                }
+              }}
+              title="说完了，立即发送给 AI"
+            >
+              <Send size={18} />
+              <span className="text-xs font-medium">{userText ? '说完了，发送' : '说完了'}</span>
+            </Button>
+          )}
+
           <Button
             type="button"
             variant="destructive"
             size="icon"
-            className="w-16 h-16 rounded-full bg-red-500 text-white shadow-xl shadow-red-500/20 hover:bg-red-600 transition-all active:scale-90 flex items-center justify-center border-4 border-black/20"
+            className="w-16 h-16 rounded-full bg-red-500 text-white shadow-xl shadow-red-500/20 hover:bg-red-600 transition-all active:scale-90 flex items-center justify-center border-4 border-black/20 shrink-0"
             onClick={handleHangup}
             title="挂断"
           >
