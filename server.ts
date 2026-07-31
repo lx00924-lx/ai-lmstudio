@@ -395,7 +395,17 @@ async function startServer() {
       }
 
       console.log(`[FunASR WS Proxy] Connecting to target WS: ${targetEndpoint} with protocols:`, protocols);
-      const targetWs = protocols ? new WSWebSocket(targetEndpoint, protocols) : new WSWebSocket(targetEndpoint);
+      
+      const wsOptions: WSWebSocket.ClientOptions = {
+        rejectUnauthorized: false,
+        headers: {
+          'User-Agent': (request.headers['user-agent'] as string) || 'Mozilla/5.0',
+        },
+      };
+
+      const targetWs = protocols 
+        ? new WSWebSocket(targetEndpoint, protocols, wsOptions) 
+        : new WSWebSocket(targetEndpoint, wsOptions);
       const pendingBuffer: any[] = [];
 
       targetWs.on("open", () => {
