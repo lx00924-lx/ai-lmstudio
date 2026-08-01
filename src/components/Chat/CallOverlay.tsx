@@ -59,6 +59,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
   const pendingTtsTextRef = useRef('');
   const ttsCleanTimerRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isConfigReadyRef = useRef<boolean>(false);
   const recognitionRef = useRef<any>(null);
   const lastTtsEndTimeRef = useRef<number>(0);
   const aiScrollRef = useRef<HTMLDivElement | null>(null);
@@ -149,6 +150,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 
       ws.onopen = () => {
         console.log('FunASR WS connection established');
+        isConfigReadyRef.current = false;
         const config = {
           mode: "2pass",
           chunk_size: [5, 10, 5],
@@ -178,9 +180,13 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           }
         }, 30000);
         
-        if (statusRef.current === 'connecting') {
-          startAudioCapture();
-        }
+        // 延迟 300ms 等待 FunASR 服务端完成配置解析后再开启录音传输，避免 chunk_size not set 异常
+        setTimeout(() => {
+          isConfigReadyRef.current = true;
+          if (statusRef.current === 'connecting') {
+            startAudioCapture();
+          }
+        }, 300);
       };
 
       ws.onmessage = (event) => {
@@ -382,7 +388,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         }
 
         // 转为 16位有符号 PCM 并发送 (含 16000Hz 重采样)
-        if (!isMuted && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        if (!isMuted && isConfigReadyRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           try {
             const buffer = floatTo16BitPCM(inputData, e.inputBuffer.sampleRate);
             wsRef.current.send(buffer);
