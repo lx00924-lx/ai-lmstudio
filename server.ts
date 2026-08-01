@@ -379,8 +379,16 @@ async function startServer() {
       }
 
       targetEndpoint = targetEndpoint.trim();
-      if (!targetEndpoint.startsWith("ws://") && !targetEndpoint.startsWith("wss://")) {
-        targetEndpoint = `ws://${targetEndpoint}`;
+      if (targetEndpoint.startsWith("http://")) {
+        targetEndpoint = targetEndpoint.replace("http://", "ws://");
+      } else if (targetEndpoint.startsWith("https://")) {
+        targetEndpoint = targetEndpoint.replace("https://", "wss://");
+      } else if (!targetEndpoint.startsWith("ws://") && !targetEndpoint.startsWith("wss://")) {
+        if (targetEndpoint.includes('.') && !targetEndpoint.startsWith('127.') && !targetEndpoint.startsWith('192.168.') && !targetEndpoint.startsWith('10.') && !targetEndpoint.startsWith('localhost')) {
+          targetEndpoint = `wss://${targetEndpoint}`;
+        } else {
+          targetEndpoint = `ws://${targetEndpoint}`;
+        }
       }
 
       console.log(`[FunASR WS Proxy] Proxying WebSocket connection to target: ${targetEndpoint}`);

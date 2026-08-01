@@ -44,6 +44,7 @@ export interface AppSettings {
   contextLength?: number;
   funasrHttpEndpoint?: string;
   funasrWsEndpoint?: string;
+  showDebugFloatButton?: boolean;
 }
 
 export interface ChatState {

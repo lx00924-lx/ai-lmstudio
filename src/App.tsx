@@ -17,11 +17,12 @@ import { DeleteHistoryDialog } from './components/Chat/DeleteHistoryDialog';
 import { UpdateDialog } from './components/Chat/UpdateDialog';
 import { AuthScreen } from './components/Auth/AuthScreen';
 import { CallOverlay } from './components/Chat/CallOverlay';
+import { LogViewerModal, DebugFloatButton } from './components/Debug/LogViewerModal';
 import { Message, ChatState, AppSettings } from './types';
 import { sendMessageToGemini, transcribeAudio } from './services/gemini';
 import socket from './lib/socket';
 import { API_BASE_URL } from './config';
-import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff, LogOut } from 'lucide-react';
+import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff, LogOut, Bug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from './components/ui/input';
 import { motion, AnimatePresence } from 'motion/react';
@@ -76,10 +77,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   splashDuration: 1000,
   backgroundOpacity: 0.2,
   showBackgroundInDarkMode: true,
+  showDebugFloatButton: true,
 };
 
 export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDeleteHistoryOpen, setIsDeleteHistoryOpen] = useState(false);
   const [isCallOpen, setIsCallOpen] = useState(false);
@@ -1333,7 +1336,17 @@ export default function App() {
         onCheckUpdate={handleCheckUpdate}
         userId={user?.id}
         username={user?.username}
+        onOpenLogViewer={() => setIsLogViewerOpen(true)}
       />
+
+      <LogViewerModal
+        open={isLogViewerOpen}
+        onOpenChange={setIsLogViewerOpen}
+      />
+
+      {(state.settings.showDebugFloatButton ?? true) && (
+        <DebugFloatButton onClick={() => setIsLogViewerOpen(true)} />
+      )}
 
       <DeleteHistoryDialog
         isOpen={isDeleteHistoryOpen}

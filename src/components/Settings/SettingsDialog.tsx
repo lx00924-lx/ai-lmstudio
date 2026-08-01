@@ -16,13 +16,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AppSettings } from '../../types';
 import { API_BASE_URL } from '../../config';
-import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2 } from 'lucide-react';
+import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2 } from 'lucide-react';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { CapacitorHttp } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { ImageCropDialog } from './ImageCropDialog';
 import { ModelSelector } from '../Chat/ModelSelector';
+import { copyLogsToClipboard, clearLogs } from '../../lib/logger';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -32,6 +33,7 @@ interface SettingsDialogProps {
   onCheckUpdate: () => Promise<{ success: boolean; data?: any; error?: string }>;
   userId?: string;
   username?: string;
+  onOpenLogViewer?: () => void;
 }
 
 export const SettingsDialog: React.FC<SettingsDialogProps> = ({
@@ -42,6 +44,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   onCheckUpdate,
   userId,
   username,
+  onOpenLogViewer,
 }) => {
   const [localSettings, setLocalSettings] = React.useState<AppSettings>(settings);
   const [updateStatus, setUpdateStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
@@ -314,7 +317,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 value={localSettings.apiEndpoint} 
                 onChange={handleChange}
                 className="h-8 text-xs flex-1" 
-                placeholder="例如：http://localhost:1234" 
               />
               <Button
                 variant="outline"
@@ -450,7 +452,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           </div>
 
           <div className="border-t pt-4 mt-2">
-            <h4 className="text-xs font-semibold mb-3">语音转写设置 (FunASR)</h4>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-semibold">语音转写设置 (FunASR)</h4>
+            </div>
             <div className="space-y-3">
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="funasrHttpEndpoint" className="text-right text-xs">转写 HTTP</Label>
@@ -460,7 +464,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   value={localSettings.funasrHttpEndpoint || ''} 
                   onChange={handleChange} 
                   className="col-span-3 h-8 text-xs" 
-                  placeholder="例如：http://127.0.0.1:7860/asr" 
                 />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
@@ -471,7 +474,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   value={localSettings.funasrWsEndpoint || ''} 
                   onChange={handleChange} 
                   className="col-span-3 h-8 text-xs" 
-                  placeholder="例如：ws://127.0.0.1:10095" 
                 />
               </div>
             </div>
@@ -578,6 +580,51 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   disabled={isChecking}
                 >
                   {isChecking ? '检测中...' : '检测新版本'}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t pt-4 mt-2">
+            <h4 className="text-xs font-semibold mb-3 flex items-center gap-1.5 text-emerald-500">
+              <Terminal className="w-3.5 h-3.5" />
+              APP 检修与调试日志
+            </h4>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-2.5 rounded-lg border bg-muted/30">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-medium">显示悬浮调试球</div>
+                  <div className="text-[10px] text-muted-foreground">在右下角提供轻量 🐞 调试按钮，方便随时排查 APP 报错</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={localSettings.showDebugFloatButton ?? true}
+                  onChange={(e) => setLocalSettings(prev => ({ ...prev, showDebugFloatButton: e.target.checked }))}
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5 border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-500"
+                  onClick={() => {
+                    if (onOpenLogViewer) onOpenLogViewer();
+                  }}
+                >
+                  <Bug className="w-3.5 h-3.5 text-emerald-500" />
+                  打开控制台
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5"
+                  onClick={() => copyLogsToClipboard()}
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  复制日志
                 </Button>
               </div>
             </div>

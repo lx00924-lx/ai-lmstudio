@@ -4,6 +4,10 @@ import App from './App.tsx';
 import './index.css';
 import { defineCustomElements } from '@ionic/pwa-elements/loader';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { initLogger } from './lib/logger';
+
+// Initialize global logger interception
+initLogger();
 
 // Call the element loader after the platform has been bootstrapped
 defineCustomElements(window);

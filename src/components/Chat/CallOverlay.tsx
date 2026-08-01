@@ -107,8 +107,16 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     }
 
     let targetWsUrl = rawEndpoint.trim();
-    if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
-      targetWsUrl = `ws://${targetWsUrl}`;
+    if (targetWsUrl.startsWith('http://')) {
+      targetWsUrl = targetWsUrl.replace('http://', 'ws://');
+    } else if (targetWsUrl.startsWith('https://')) {
+      targetWsUrl = targetWsUrl.replace('https://', 'wss://');
+    } else if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
+      if (targetWsUrl.includes('.') && !targetWsUrl.startsWith('127.') && !targetWsUrl.startsWith('192.168.') && !targetWsUrl.startsWith('10.') && !targetWsUrl.startsWith('localhost')) {
+        targetWsUrl = `wss://${targetWsUrl}`;
+      } else {
+        targetWsUrl = `ws://${targetWsUrl}`;
+      }
     }
 
     // 判断是否为打包 Native App 环境（如 Capacitor / Cordova / WebView / file: 协议）
@@ -202,7 +210,12 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         console.error('FunASR WS Error:', err);
         if (statusRef.current === 'connecting') {
           setStatus('error');
-          setErrorMessage('FunASR 实时语音连接失败，请确认服务端已启动并且地址正确。');
+          const urlStr = rawEndpoint.toLowerCase();
+          if (urlStr.includes('127.0.0.1') || urlStr.includes('localhost')) {
+            setErrorMessage('手机上无法连接到 127.0.0.1 (这是手机本机)。请在设置中将 WS 地址修改为运行 FunASR 电脑的局域网 IP (例如 ws://192.168.1.xxx:10095)。');
+          } else {
+            setErrorMessage('FunASR 实时语音连接失败，请确认服务端已启动且手机与电脑在同一 Wi-Fi 下。');
+          }
         }
       };
 
@@ -210,7 +223,12 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         console.log('FunASR WS closed');
         if (statusRef.current === 'connecting') {
           setStatus('error');
-          setErrorMessage('流式语音服务连接断开。');
+          const urlStr = rawEndpoint.toLowerCase();
+          if (urlStr.includes('127.0.0.1') || urlStr.includes('localhost')) {
+            setErrorMessage('手机上无法使用 127.0.0.1。请在设置中修改为运行 FunASR 的电脑局域网 IP (如 ws://192.168.x.x:10095)。');
+          } else {
+            setErrorMessage('流式语音服务连接断开。请检查 WS 地址及手机网络连接。');
+          }
         }
       };
 
@@ -704,8 +722,8 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
         speakNextInQueue();
       };
 
-      utterance.onerror = (e) => {
-        console.error('SpeechSynthesis error:', e);
+      utterance.onerror = (e: SpeechSynthesisErrorEvent) => {
+        console.warn('SpeechSynthesis warning/error event:', e.error || e.type || 'interrupted');
         currentUtteranceRef.current = null;
         speakNextInQueue();
       };
@@ -915,6 +933,16 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
           {status === 'error' ? (
             <div className="space-y-3 py-2 text-center">
               <p className="text-sm text-destructive font-medium leading-relaxed">{errorMessage}</p>
+              
+              <div className="text-xs text-white/60 bg-white/5 border border-white/10 rounded-xl p-3 text-left space-y-1.5 font-sans">
+                <p className="font-semibold text-white/80">📱 手机端连接排查指南：</p>
+                <ol className="list-decimal list-inside space-y-1 text-[11px] leading-normal text-white/70">
+                  <li><strong className="text-amber-300 font-normal">不可使用 127.0.0.1 / localhost</strong>：请在设置中更改为电脑在局域网中的真实 IP（如 <code className="text-sky-300 bg-black/30 px-1 py-0.5 rounded">ws://192.168.1.x:10095</code>）。</li>
+                  <li><strong>连接同一个 Wi-Fi</strong>：确保手机与运行 FunASR 语音服务的电脑连接在同一个无线网络下，且手机未开启 4G/5G 流量。</li>
+                  <li><strong>防火墙与公网服务</strong>：确认电脑防火墙允许 10095 端口入站访问；若在网页端(HTTPS)访问，建议安装打包后的 Android App 直连。</li>
+                </ol>
+              </div>
+
               <Button
                 variant="outline"
                 size="sm"
