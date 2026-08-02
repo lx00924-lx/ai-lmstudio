@@ -8,6 +8,7 @@ import { Message, AppSettings } from "../types";
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { estimateTokens } from "../lib/utils";
 import { API_BASE_URL } from "../config";
+import { buildSystemPromptWithSkillsAndMemory } from "../lib/agent/agentEngine";
 
 // Helper to sanitize API endpoint
 function sanitizeEndpoint(endpoint: string): string {
@@ -171,7 +172,7 @@ export async function sendMessageToGemini(
     });
 
     const modelName = settings.modelName || "gemini-3-flash-preview";
-    const systemInstruction = settings.systemInstruction || `你是 ${settings.aiName}，一个乐于助人的 AI 助手。请用中文回答。保持回答简洁并适合移动端阅读。使用 markdown 格式。`;
+    const systemInstruction = buildSystemPromptWithSkillsAndMemory(settings.systemInstruction);
 
     // Helper to map message to Gemini parts
     const mapMessageToParts = (msg: Message) => {

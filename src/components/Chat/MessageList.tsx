@@ -14,6 +14,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2 } from 'lucide-react';
 import { Clipboard } from '@capacitor/clipboard';
 import { Toast } from '@capacitor/toast';
+import { AgentStepBadge } from '../Agent/AgentStepBadge';
 
 interface VoiceMessagePlayerProps {
   url: string;
@@ -354,7 +355,11 @@ const MessageItem: React.FC<{
             </>
           )}
 
-              {message.content && (
+          {message.agentSteps && message.agentSteps.length > 0 && (
+            <AgentStepBadge steps={message.agentSteps} />
+          )}
+
+          {message.content && (
                 <div className={cn(
                   "prose prose-sm dark:prose-invert max-w-none",
                   (message.type === 'image' || message.type === 'voice') && "mt-2 pt-2 border-t border-border/50"
