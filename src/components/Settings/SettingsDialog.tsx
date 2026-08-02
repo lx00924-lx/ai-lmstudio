@@ -74,8 +74,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     if (!endpoint.trim()) return;
     
     let sanitized = endpoint.trim();
-    if (!sanitized.startsWith('http')) {
-      sanitized = `http://${sanitized}`;
+    if (!sanitized.startsWith('http://') && !sanitized.startsWith('https://')) {
+      sanitized = `https://${sanitized}`;
     }
     if (!sanitized.endsWith('/v1') && !sanitized.endsWith('/v1/')) {
       sanitized = `${sanitized.replace(/\/$/, '')}/v1`;
@@ -208,7 +208,15 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   };
 
   const handleSave = () => {
-    onSave(localSettings);
+    let sanitizedEndpoint = localSettings.apiEndpoint ? localSettings.apiEndpoint.trim() : '';
+    if (sanitizedEndpoint && !sanitizedEndpoint.startsWith('http://') && !sanitizedEndpoint.startsWith('https://')) {
+      sanitizedEndpoint = `https://${sanitizedEndpoint}`;
+    }
+    const updatedSettings = {
+      ...localSettings,
+      apiEndpoint: sanitizedEndpoint
+    };
+    onSave(updatedSettings);
     onOpenChange(false);
   };
 

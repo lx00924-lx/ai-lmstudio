@@ -315,8 +315,8 @@ async function startServer() {
       formData.append("is_itn", "1");
 
       let sanitized = endpoint.trim();
-      if (!sanitized.startsWith('http')) {
-        sanitized = `http://${sanitized}`;
+      if (!sanitized.startsWith('http://') && !sanitized.startsWith('https://')) {
+        sanitized = `https://${sanitized}`;
       }
 
       console.log(`[FunASR Proxy] Sending request to: ${sanitized}`);

@@ -12,8 +12,8 @@ import { API_BASE_URL } from "../config";
 // Helper to sanitize API endpoint
 function sanitizeEndpoint(endpoint: string): string {
   let sanitized = endpoint.trim();
-  if (!sanitized.startsWith('http')) {
-    sanitized = `http://${sanitized}`;
+  if (!sanitized.startsWith('http://') && !sanitized.startsWith('https://')) {
+    sanitized = `https://${sanitized}`;
   }
   // Ensure it ends with /v1 for LM Studio compatibility
   if (!sanitized.endsWith('/v1') && !sanitized.endsWith('/v1/')) {
@@ -63,7 +63,7 @@ export async function sendMessageToGemini(
       
       const systemMessage = settings.systemInstruction 
         ? [{ role: 'system', content: settings.systemInstruction }] 
-        : [{ role: 'system', content: `你是 ${settings.aiName}，一个乐于助人的 AI 助手。请用中文回答。保持回答简洁并适合移动端阅读。使用 markdown 格式。` }];
+        : [];
 
       const mapMessageToCustomContent = (msg: Message) => {
         const parts: any[] = [];
@@ -77,7 +77,7 @@ export async function sendMessageToGemini(
         }
 
         if (msg.quote) {
-          text = `引用消息 [${msg.quote.userName}]: "${msg.quote.content}"\n\n回复上面的消息: ${text}`;
+          text = `引用消息: "${msg.quote.content}"\n\n回复上面的消息: ${text}`;
         }
         
         if (text) {
@@ -171,7 +171,7 @@ export async function sendMessageToGemini(
     });
 
     const modelName = settings.modelName || "gemini-3-flash-preview";
-    const systemInstruction = settings.systemInstruction || `你是 ${settings.aiName}，一个乐于助人的 AI 助手。请用中文回答。保持回答简洁并适合移动端阅读。使用 markdown 格式。`;
+    const systemInstruction = settings.systemInstruction;
 
     // Helper to map message to Gemini parts
     const mapMessageToParts = (msg: Message) => {
@@ -188,7 +188,7 @@ export async function sendMessageToGemini(
 
       // Handle quotes
       if (msg.quote) {
-        finalContent = `引用消息 [${msg.quote.userName}]: "${msg.quote.content}"\n\n回复上面的消息: ${finalContent}`;
+        finalContent = `引用消息: "${msg.quote.content}"\n\n回复上面的消息: ${finalContent}`;
       }
 
       msgParts.push({ text: finalContent || ' ' });
@@ -244,7 +244,7 @@ export async function sendMessageToGemini(
         { role: 'user', parts }
       ],
       config: {
-        systemInstruction: systemInstruction,
+        ...(systemInstruction ? { systemInstruction } : {}),
         tools: [{ googleSearch: {} }] as any,
       }
     });
