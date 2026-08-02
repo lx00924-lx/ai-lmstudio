@@ -18,14 +18,11 @@ import { UpdateDialog } from './components/Chat/UpdateDialog';
 import { AuthScreen } from './components/Auth/AuthScreen';
 import { CallOverlay } from './components/Chat/CallOverlay';
 import { LogViewerModal, DebugFloatButton } from './components/Debug/LogViewerModal';
-import { AgentCenterModal } from './components/Agent/AgentCenterModal';
-import { executeAgentSkillHandler } from './lib/agent/agentEngine';
-import { AgentExecutionStep } from './lib/agent/types';
 import { Message, ChatState, AppSettings } from './types';
 import { sendMessageToGemini, transcribeAudio } from './services/gemini';
 import socket from './lib/socket';
 import { API_BASE_URL } from './config';
-import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff, LogOut, Bug, Laptop, Brain } from 'lucide-react';
+import { Sparkles, Settings, Sun, Moon, PanelLeft, Search, Trash2, X, Download, Upload, Calendar, Image, ChevronUp, ChevronDown, Filter, Eye, EyeOff, LogOut, Bug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from './components/ui/input';
 import { motion, AnimatePresence } from 'motion/react';
@@ -84,7 +81,6 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export default function App() {
-  const [isAgentCenterOpen, setIsAgentCenterOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -652,60 +648,12 @@ export default function App() {
 
   const runGeminiQuery = useCallback(async (allMessagesSoFar: Message[]) => {
     const assistantMessageId = crypto.randomUUID();
-    const lastUserMessage = allMessagesSoFar[allMessagesSoFar.length - 1];
-    const userPrompt = (lastUserMessage?.content || '').toLowerCase();
-
-    const agentSteps: AgentExecutionStep[] = [];
-
-    // 检测意图并触发技能
-    if (userPrompt.includes('截图') || userPrompt.includes('屏幕') || userPrompt.includes('screenshot')) {
-      const { result, screenshotAfter } = await executeAgentSkillHandler('takeScreenshot', { monitorIndex: 0 });
-      agentSteps.push({
-        id: 'step-' + Date.now() + '-1',
-        stepNumber: 1,
-        toolName: 'takeScreenshot',
-        args: { monitorIndex: 0 },
-        result,
-        status: 'completed',
-        thought: '检测到屏幕截图需求，正在自动截取当前桌面图像。',
-        timestamp: new Date().toLocaleTimeString(),
-        screenshotAfter
-      });
-    } else if (userPrompt.includes('命令行') || userPrompt.includes('终端') || userPrompt.includes('运行命令') || userPrompt.includes('shell')) {
-      const cmdMatch = userPrompt.match(/`([^`]+)`/) || userPrompt.match(/运行[：:\s]*(.+)/);
-      const cmdToRun = cmdMatch ? cmdMatch[1] : 'ls -la';
-      const { result } = await executeAgentSkillHandler('runTerminalCommand', { command: cmdToRun });
-      agentSteps.push({
-        id: 'step-' + Date.now() + '-2',
-        stepNumber: 1,
-        toolName: 'runTerminalCommand',
-        args: { command: cmdToRun },
-        result,
-        status: 'completed',
-        thought: `分析需要执行的终端脚本命令: ${cmdToRun}`,
-        timestamp: new Date().toLocaleTimeString()
-      });
-    } else if (userPrompt.includes('知识库') || userPrompt.includes('查找文档') || userPrompt.includes('查阅')) {
-      const { result } = await executeAgentSkillHandler('searchKnowledgeBase', { query: lastUserMessage?.content || '', topK: 3 });
-      agentSteps.push({
-        id: 'step-' + Date.now() + '-3',
-        stepNumber: 1,
-        toolName: 'searchKnowledgeBase',
-        args: { query: lastUserMessage?.content },
-        result,
-        status: 'completed',
-        thought: '正在检索本地 OpenClaw / RAG 知识库关联条目。',
-        timestamp: new Date().toLocaleTimeString()
-      });
-    }
-
     const assistantMessage: Message = {
       id: assistantMessageId,
       role: 'assistant',
       content: "",
       timestamp: new Date(),
-      type: 'text',
-      agentSteps: agentSteps.length > 0 ? agentSteps : undefined
+      type: 'text'
     };
 
     // 1. Add Assistant placeholder
@@ -1042,17 +990,6 @@ export default function App() {
             <div className="flex flex-col gap-2 w-full">
               <Button 
                 variant="ghost" 
-                className="w-32 justify-start gap-3 rounded-full bg-gradient-to-r from-indigo-500/20 to-purple-500/20 border border-indigo-500/40 text-indigo-300 font-semibold transition-all hover:bg-indigo-500/30 active:scale-95 pl-3"
-                onClick={() => {
-                  setIsAgentCenterOpen(true);
-                  setIsSidebarOpen(false);
-                }}
-              >
-                <Sparkles size={20} className="text-indigo-400" />
-                <span>智能体中心</span>
-              </Button>
-              <Button 
-                variant="ghost" 
                 className={cn(
                   "w-32 justify-start gap-3 rounded-full bg-muted border transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3",
                   isSearching ? "text-primary border-primary/50" : "text-muted-foreground"
@@ -1288,15 +1225,6 @@ export default function App() {
           </div>
 
           <div className={cn("flex items-center gap-2 z-10", isSearching && "hidden")}>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsAgentCenterOpen(true)}
-              className="rounded-full bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border-indigo-500/30 text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/20 flex items-center gap-1.5 px-3 py-1 text-xs font-semibold shadow-sm transition-all active:scale-95"
-            >
-              <Sparkles size={14} className="text-indigo-400 animate-pulse" />
-              <span>Agent 智能体</span>
-            </Button>
           </div>
         </header>
 
@@ -1419,11 +1347,6 @@ export default function App() {
       {(state.settings.showDebugFloatButton ?? true) && (
         <DebugFloatButton onClick={() => setIsLogViewerOpen(true)} />
       )}
-
-      <AgentCenterModal
-        isOpen={isAgentCenterOpen}
-        onClose={() => setIsAgentCenterOpen(false)}
-      />
 
       <DeleteHistoryDialog
         isOpen={isDeleteHistoryOpen}

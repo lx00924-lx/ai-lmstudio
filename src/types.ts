@@ -19,7 +19,6 @@ export interface Message {
     content: string;
     timestamp: Date;
   };
-  agentSteps?: import('./lib/agent/types').AgentExecutionStep[];
 }
 
 export interface AppSettings {

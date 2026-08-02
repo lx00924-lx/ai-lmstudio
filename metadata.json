@@ -1,6 +1,6 @@
 {
   "name": "AI",
-  "description": "具有 OpenClaw 风格的桌面智能体助手，支持 Computer Use 屏幕/按键控制、RAG 知识库与长期记忆系统。",
+  "description": "一个具有沉浸式 UI 的智能 AI 聊天应用，支持文本、图片和语音交互。",
   "requestFramePermissions": [
     "screen-wake-lock",
     "microphone",
