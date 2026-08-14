@@ -956,7 +956,7 @@ export default function App() {
   );
 
   return (
-    <div className="flex h-screen bg-background text-foreground overflow-hidden relative">
+    <div className="flex h-screen h-[100dvh] w-full bg-background text-foreground overflow-hidden relative">
       <AnimatePresence>
         {!user && <AuthScreen key="auth" onLogin={handleLogin} />}
       </AnimatePresence>
@@ -972,7 +972,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setIsSidebarOpen(false)}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
           />
         )}
       </AnimatePresence>
@@ -981,17 +981,17 @@ export default function App() {
       <AnimatePresence>
         {isSidebarOpen && (
           <motion.aside
-            initial={{ x: -160 }}
+            initial={{ x: -200 }}
             animate={{ x: 0 }}
-            exit={{ x: -160 }}
+            exit={{ x: -200 }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed inset-y-0 left-0 w-40 border-r bg-sidebar dark:bg-black flex flex-col items-start py-8 px-4 gap-6 shrink-0 z-50 shadow-2xl"
+            className="fixed inset-y-0 left-0 w-44 max-w-[80vw] border-r bg-sidebar dark:bg-black flex flex-col items-start py-6 sm:py-8 px-4 gap-6 shrink-0 z-50 shadow-2xl pb-safe pt-safe"
           >
             <div className="flex flex-col gap-2 w-full">
               <Button 
                 variant="ghost" 
                 className={cn(
-                  "w-32 justify-start gap-3 rounded-full bg-muted border transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3",
+                  "w-full justify-start gap-3 rounded-full bg-muted border transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3 text-sm",
                   isSearching ? "text-primary border-primary/50" : "text-muted-foreground"
                 )}
                 onClick={() => {
@@ -999,33 +999,33 @@ export default function App() {
                   if (!isSearching) setIsSidebarOpen(false);
                 }}
               >
-                <Search size={20} />
+                <Search size={18} />
                 <span>搜索聊天</span>
               </Button>
               <Button 
                 variant="ghost" 
-                className="w-32 justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3"
+                className="w-full justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3 text-sm"
                 onClick={handleExportChat}
                 title="导出记录"
               >
-                <Upload size={20} />
+                <Upload size={18} />
                 <span>导出记录</span>
               </Button>
               <Button 
                 variant="ghost" 
-                className="w-32 justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3"
+                className="w-full justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3 text-sm"
                 onClick={handleImportChat}
                 title="导入记录"
               >
-                <Download size={20} />
+                <Download size={18} />
                 <span>导入记录</span>
               </Button>
               <Button 
                 variant="ghost" 
-                className="w-32 justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3"
+                className="w-full justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3 text-sm"
                 onClick={clearChat}
               >
-                <Trash2 size={20} />
+                <Trash2 size={18} />
                 <span>清除记录</span>
               </Button>
             </div>
@@ -1033,26 +1033,26 @@ export default function App() {
             <div className="mt-auto flex flex-col gap-2 w-full">
               <Button 
                 variant="ghost" 
-                className="w-32 justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3"
+                className="w-full justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3 text-sm"
                 onClick={toggleTheme}
               >
-                {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
                 <span>切换主题</span>
               </Button>
               <Button 
                 variant="ghost" 
-                className="w-32 justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3"
+                className="w-full justify-start gap-3 rounded-full bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 pl-3 text-sm"
                 onClick={() => setIsSettingsOpen(true)}
               >
-                <Settings size={20} />
+                <Settings size={18} />
                 <span>设置</span>
               </Button>
               <Button 
                 variant="ghost" 
-                className="w-32 justify-start gap-3 rounded-full bg-destructive/10 border border-destructive/20 text-destructive transition-all hover:bg-destructive hover:text-destructive-foreground active:scale-95 pl-3"
+                className="w-full justify-start gap-3 rounded-full bg-destructive/10 border border-destructive/20 text-destructive transition-all hover:bg-destructive hover:text-destructive-foreground active:scale-95 pl-3 text-sm"
                 onClick={handleLogout}
               >
-                <LogOut size={20} />
+                <LogOut size={18} />
                 <span>退出登录</span>
               </Button>
             </div>
@@ -1061,25 +1061,25 @@ export default function App() {
       </AnimatePresence>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col relative w-full">
+      <main className="flex-1 flex flex-col relative w-full h-full min-h-0 overflow-hidden">
         {/* Header */}
         <header className={cn(
-          "px-8 py-6 flex items-center justify-between border-b relative transition-all duration-300",
-          isSearching && "py-8 min-h-[110px]"
+          "px-4 py-3 sm:px-8 sm:py-5 flex items-center justify-between border-b relative transition-all duration-300 shrink-0",
+          isSearching && "py-4 sm:py-6 min-h-[90px] sm:min-h-[110px]"
         )}>
-          <div className={cn("flex items-center gap-4 z-10", isSearching && "hidden")}>
+          <div className={cn("flex items-center gap-2 sm:gap-4 z-10", isSearching && "hidden")}>
             <Button
               variant="ghost"
               size="icon"
-              className="rounded-full w-11 h-11 bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95 -ml-2"
+              className="rounded-full w-9 h-9 sm:w-11 sm:h-11 bg-muted border text-muted-foreground transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             >
-              <PanelLeft size={20} />
+              <PanelLeft className="size-4 sm:size-5" />
             </Button>
           </div>
 
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="flex flex-col items-center gap-1">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none px-12 sm:px-0">
+            <div className="flex flex-col items-center gap-1 w-full sm:w-auto max-w-full">
               <AnimatePresence mode="wait">
                 {isSearching ? (
                   <motion.div
@@ -1087,21 +1087,21 @@ export default function App() {
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 10 }}
-                    className="pointer-events-auto w-72 sm:w-[480px] flex items-center gap-2"
+                    className="pointer-events-auto w-full max-w-sm sm:max-w-md md:w-[480px] flex items-center gap-1.5 sm:gap-2 px-2"
                   >
-                    <div className="relative flex-1 flex flex-col items-center gap-2">
-                      <div className="flex items-center gap-2 w-full">
-                        <div className="relative flex-1">
+                    <div className="relative flex-1 flex flex-col items-center gap-1.5 sm:gap-2 min-w-0">
+                      <div className="flex items-center gap-1.5 sm:gap-2 w-full">
+                        <div className="relative flex-1 min-w-0">
                           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                           <Input
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             placeholder="搜索聊天内容..."
-                            className="pl-9 h-9 rounded-full bg-muted/50 border-muted-foreground/20 focus-visible:ring-primary/20"
+                            className="pl-8 sm:pl-9 h-8 sm:h-9 rounded-full bg-muted/50 border-muted-foreground/20 focus-visible:ring-primary/20 text-xs sm:text-sm"
                             autoFocus
                           />
                           {searchQuery && (
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 pointer-events-auto">
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-auto">
                               <span className="text-[10px] text-muted-foreground font-mono">
                                 {matchingMessages.length > 0 ? `${searchMatchIndex + 1}/${matchingMessages.length}` : '0/0'}
                               </span>
@@ -1115,11 +1115,11 @@ export default function App() {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 shrink-0">
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="w-8 h-8 rounded-full bg-muted border border-muted-foreground/10 transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-muted border border-muted-foreground/10 transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                             onClick={handlePrevMatch}
                             disabled={matchingMessages.length === 0}
                           >
@@ -1128,7 +1128,7 @@ export default function App() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="w-8 h-8 rounded-full bg-muted border border-muted-foreground/10 transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-muted border border-muted-foreground/10 transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                             onClick={handleNextMatch}
                             disabled={matchingMessages.length === 0}
                           >
@@ -1137,17 +1137,17 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 w-full justify-center">
+                      <div className="flex items-center gap-1.5 sm:gap-2 w-full justify-center">
                         <div className="relative group/date">
                           <Button
                             variant="ghost"
                             size="icon"
                             className={cn(
-                              "relative overflow-hidden rounded-full w-8 h-8 bg-muted border border-muted-foreground/20 text-muted-foreground shrink-0 transition-all hover:bg-primary/10 hover:text-primary active:scale-95",
+                              "relative overflow-hidden rounded-full w-7 h-7 sm:w-8 sm:h-8 bg-muted border border-muted-foreground/20 text-muted-foreground shrink-0 transition-all hover:bg-primary/10 hover:text-primary active:scale-95",
                               selectedDate && "text-primary border-primary/40 bg-primary/5 hover:bg-primary/15"
                             )}
                           >
-                            <Calendar size={14} />
+                            <Calendar size={13} />
                             <input 
                               type="date"
                               value={selectedDate}
@@ -1170,32 +1170,32 @@ export default function App() {
                           variant="ghost"
                           size="icon"
                           className={cn(
-                            "rounded-full w-8 h-8 bg-muted border border-muted-foreground/20 text-muted-foreground shrink-0 transition-all hover:bg-primary/10 hover:text-primary active:scale-95",
+                            "rounded-full w-7 h-7 sm:w-8 sm:h-8 bg-muted border border-muted-foreground/20 text-muted-foreground shrink-0 transition-all hover:bg-primary/10 hover:text-primary active:scale-95",
                             isImageFilter && "text-primary border-primary/40 bg-primary/5 hover:bg-primary/15"
                           )}
                           onClick={() => setIsImageFilter(!isImageFilter)}
                           title="只显示图片"
                         >
-                          <Image size={14} />
+                          <Image size={13} />
                         </Button>
 
                         <Button
                           variant="ghost"
                           className={cn(
-                            "h-8 px-3 rounded-full bg-muted border border-muted-foreground/20 text-[10px] font-medium transition-all gap-1.5 hover:bg-primary/10 hover:text-primary active:scale-95",
+                            "h-7 sm:h-8 px-2 sm:px-3 rounded-full bg-muted border border-muted-foreground/20 text-[10px] font-medium transition-all gap-1 hover:bg-primary/10 hover:text-primary active:scale-95",
                             !hideNonMatches && "text-primary border-primary/40 bg-primary/5 hover:bg-primary/15"
                           )}
                           onClick={() => setHideNonMatches(!hideNonMatches)}
                         >
                           {hideNonMatches ? <EyeOff size={10} /> : <Eye size={10} />}
-                          {hideNonMatches ? "隐藏无关" : "显示全部"}
+                          <span>{hideNonMatches ? "隐藏无关" : "显示全部"}</span>
                         </Button>
                       </div>
                     </div>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="rounded-full w-9 h-9 bg-muted border text-muted-foreground shrink-0 transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                      className="rounded-full w-8 h-8 sm:w-9 sm:h-9 bg-muted border text-muted-foreground shrink-0 transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
                       onClick={() => {
                         setIsSearching(false);
                         setSearchQuery('');
@@ -1205,7 +1205,7 @@ export default function App() {
                         setSearchMatchIndex(-1);
                       }}
                     >
-                      <X size={16} />
+                      <X size={15} />
                     </Button>
                   </motion.div>
                 ) : (
@@ -1214,10 +1214,10 @@ export default function App() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -10 }}
-                    className="text-center"
+                    className="text-center truncate max-w-[200px] sm:max-w-none"
                   >
-                    <h1 className="text-lg font-semibold leading-none">{state.settings.aiName}</h1>
-                    <p className="text-[10px] text-muted-foreground mt-1">{state.settings.modelName}</p>
+                    <h1 className="text-base sm:text-lg font-semibold leading-tight truncate">{state.settings.aiName}</h1>
+                    <p className="text-[9px] sm:text-[10px] text-muted-foreground mt-0.5 truncate">{state.settings.modelName}</p>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1236,7 +1236,7 @@ export default function App() {
         )}
 
         {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col relative overflow-hidden">
+        <div className="flex-1 flex flex-col relative overflow-hidden min-h-0">
           {/* Custom Background Layer */}
           {state.settings.customBackground && (theme === 'light' || state.settings.showBackgroundInDarkMode) && (
             <div 
@@ -1265,7 +1265,10 @@ export default function App() {
           />
 
           {/* Input Area */}
-          <div className={cn("p-8 relative z-10", !isSelectionMode && isSearching && "hidden")}>
+          <div className={cn(
+            "p-3 sm:p-5 md:p-6 lg:p-8 pb-safe relative z-10 shrink-0", 
+            !isSelectionMode && isSearching && "hidden"
+          )}>
             <AnimatePresence mode="wait">
               {isSelectionMode ? (
                 <motion.div
@@ -1273,11 +1276,11 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 20 }}
-                  className="flex gap-4"
+                  className="flex gap-2 sm:gap-4 max-w-2xl mx-auto"
                 >
                   <Button
                     variant="outline"
-                    className="flex-1 h-12 rounded-2xl bg-muted/50 border-muted-foreground/20 text-muted-foreground hover:text-foreground"
+                    className="flex-1 h-10 sm:h-12 rounded-xl sm:rounded-2xl bg-muted/50 border-muted-foreground/20 text-muted-foreground hover:text-foreground text-xs sm:text-sm"
                     onClick={() => {
                       setIsSelectionMode(false);
                       setSelectedMessageIds([]);
@@ -1287,14 +1290,14 @@ export default function App() {
                   </Button>
                   <Button
                     variant="outline"
-                    className="flex-1 h-12 rounded-2xl bg-muted/50 border-muted-foreground/20 text-primary hover:bg-primary/5"
+                    className="flex-1 h-10 sm:h-12 rounded-xl sm:rounded-2xl bg-muted/50 border-muted-foreground/20 text-primary hover:bg-primary/5 text-xs sm:text-sm"
                     onClick={handleCopySelected}
                   >
                     复制内容
                   </Button>
                   <Button
                     variant="destructive"
-                    className="flex-1 h-12 rounded-2xl shadow-lg shadow-destructive/20"
+                    className="flex-1 h-10 sm:h-12 rounded-xl sm:rounded-2xl shadow-lg shadow-destructive/20 text-xs sm:text-sm"
                     onClick={handleDeleteSelected}
                   >
                     删除消息

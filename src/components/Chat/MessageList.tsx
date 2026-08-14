@@ -294,7 +294,7 @@ const MessageItem: React.FC<{
       )}
 
       <div className={cn(
-        "flex flex-col max-w-[85%] transition-opacity",
+        "flex flex-col max-w-[90%] sm:max-w-[85%] md:max-w-[78%] transition-opacity",
         message.role === 'user' ? "items-end" : "items-start",
         isSelectionMode && !isSelected && "opacity-50"
       )}>
@@ -304,7 +304,7 @@ const MessageItem: React.FC<{
           </span>
         </div>
         <div className={cn(
-          "px-5 py-4 rounded-[20px] text-[15px] leading-relaxed transition-all relative overflow-hidden select-text",
+          "px-3.5 py-3 sm:px-5 sm:py-4 rounded-[18px] sm:rounded-[20px] text-[14px] sm:text-[15px] leading-relaxed transition-all relative overflow-hidden select-text break-words",
           message.role === 'user' 
             ? "bg-white dark:bg-card border border-border text-black dark:text-foreground" 
             : "bg-white dark:bg-card border border-border text-black dark:text-foreground",
@@ -701,7 +701,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   return (
     <div 
       ref={scrollRef} 
-        className="flex-1 overflow-y-auto p-4 space-y-6 pb-24"
+        className="flex-1 overflow-y-auto px-2.5 py-3 sm:p-4 space-y-4 sm:space-y-6 pb-20 sm:pb-24 overscroll-contain"
         onTouchMove={handleTouchMove}
       >
         {messages.map((message) => (

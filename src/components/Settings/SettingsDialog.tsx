@@ -270,7 +270,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent 
-        className="sm:max-w-[425px] bg-white dark:bg-black border-border text-foreground max-h-[90vh] overflow-y-auto"
+        className="w-[94vw] max-w-[440px] sm:max-w-[480px] bg-white dark:bg-black border-border text-foreground max-h-[85vh] max-h-[85dvh] overflow-y-auto rounded-2xl sm:rounded-3xl p-4 sm:p-6"
       >
         <DialogHeader>
           <div className="flex items-center justify-between">

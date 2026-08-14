@@ -389,9 +389,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
           )}
         </AnimatePresence>
 
-        <div className="flex items-center gap-3 bg-white dark:bg-black border border-border rounded-[24px] p-2 h-20 shadow-sm dark:shadow-none">
+        <div className="flex items-center gap-2 sm:gap-3 bg-white dark:bg-black border border-border rounded-[20px] sm:rounded-[24px] p-1.5 sm:p-2 h-14 sm:h-20 shadow-sm dark:shadow-none">
           {/* Main Input Area */}
-          <div className="relative flex-1 h-full flex items-center">
+          <div className="relative flex-1 h-full flex items-center min-w-0">
             <Input
               id="chat-text-input"
               ref={inputRef}
@@ -412,14 +412,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
                 }
               }}
               placeholder={isRecording ? "正在录音..." : "输入消息..."}
-              className="h-full border-none bg-transparent focus-visible:ring-0 text-[15px] placeholder:text-muted-foreground"
+              className="h-full border-none bg-transparent focus-visible:ring-0 text-sm sm:text-[15px] placeholder:text-muted-foreground pl-3 pr-2"
             />
             <Button
               type="button"
               variant="ghost"
               size="icon"
               className={cn(
-                "w-11 h-11 rounded-full transition-all hover:bg-primary/10 hover:text-primary active:scale-95 bg-card border mr-1",
+                "w-9 h-9 sm:w-11 sm:h-11 rounded-full transition-all hover:bg-primary/10 hover:text-primary active:scale-95 bg-card border shrink-0 mr-0.5 sm:mr-1",
                 isRecording ? "text-primary border-primary/50" : "text-muted-foreground"
               )}
               onPointerDown={handleMicDown}
@@ -434,7 +434,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
                 }
               }}
             >
-              {isRecording ? <Square size={18} fill="currentColor" /> : <Mic size={18} />}
+              {isRecording ? <Square size={16} fill="currentColor" /> : <Mic size={16} className="sm:size-[18px]" />}
             </Button>
           </div>
 
@@ -449,7 +449,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
             }} 
             size="icon"
             className={cn(
-              "shrink-0 w-12 h-12 rounded-full transition-all duration-300 active:scale-95",
+              "shrink-0 w-10 h-10 sm:w-12 sm:h-12 rounded-full transition-all duration-300 active:scale-95",
               (text.trim() || previewImage || audioUrl)
                 ? "bg-primary text-primary-foreground shadow-[0_0_15px_rgba(0,210,255,0.4)]"
                 : "bg-muted text-muted-foreground hover:bg-primary/10 hover:text-primary shadow-none rotate-0"
@@ -464,7 +464,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
                   exit={{ opacity: 0, scale: 0.5, rotate: 45 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <Send size={20} />
+                  <Send size={18} className="sm:size-5" />
                 </motion.div>
               ) : (
                 <motion.div
@@ -474,7 +474,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
                   exit={{ opacity: 0, scale: 0.5, rotate: -45 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <Plus size={24} />
+                  <Plus size={20} className="sm:size-6" />
                 </motion.div>
               )}
             </AnimatePresence>
