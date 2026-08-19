@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { PhoneOff, Mic, MicOff, Volume2, Loader2, RefreshCw, Send, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AppSettings, Message } from '../../types';
-import { sendMessageToGemini } from '../../services/gemini';
+import { sendMessageToGemini, normalizeWsAsrUrl } from '../../services/gemini';
 import { Toast } from '@capacitor/toast';
 import { cn } from '../../lib/utils';
 
@@ -107,18 +107,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
       return;
     }
 
-    let targetWsUrl = rawEndpoint.trim();
-    if (targetWsUrl.startsWith('http://')) {
-      targetWsUrl = targetWsUrl.replace('http://', 'ws://');
-    } else if (targetWsUrl.startsWith('https://')) {
-      targetWsUrl = targetWsUrl.replace('https://', 'wss://');
-    } else if (!targetWsUrl.startsWith('ws://') && !targetWsUrl.startsWith('wss://')) {
-      if (targetWsUrl.includes('.') && !targetWsUrl.startsWith('127.') && !targetWsUrl.startsWith('192.168.') && !targetWsUrl.startsWith('10.') && !targetWsUrl.startsWith('localhost')) {
-        targetWsUrl = `wss://${targetWsUrl}`;
-      } else {
-        targetWsUrl = `ws://${targetWsUrl}`;
-      }
-    }
+    const targetWsUrl = normalizeWsAsrUrl(rawEndpoint);
 
     // 判断是否为打包 Native App 环境（如 Capacitor / Cordova / WebView / file: 协议）
     const isNativeApp = typeof window !== 'undefined' && (

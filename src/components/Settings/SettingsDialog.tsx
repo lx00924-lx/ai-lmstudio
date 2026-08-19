@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AppSettings } from '../../types';
 import { API_BASE_URL } from '../../config';
-import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2 } from 'lucide-react';
+import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2, HardDrive, FolderOpen, RotateCcw, RefreshCw, Check, Type } from 'lucide-react';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { CapacitorHttp } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
@@ -24,6 +24,7 @@ import { cn } from '../../lib/utils';
 import { ImageCropDialog } from './ImageCropDialog';
 import { ModelSelector } from '../Chat/ModelSelector';
 import { copyLogsToClipboard, clearLogs } from '../../lib/logger';
+import { normalizeApiBaseUrl, getModelsUrl, normalizeHttpAsrUrl, normalizeWsAsrUrl } from '../../services/gemini';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -51,11 +52,95 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [isChecking, setIsChecking] = React.useState(false);
   const [isFetchingModels, setIsFetchingModels] = React.useState(false);
   const [modelFetchStatus, setModelFetchStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
+  const [httpTestStatus, setHttpTestStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
+  const [isTestingHttp, setIsTestingHttp] = React.useState(false);
+  const [wsTestStatus, setWsTestStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
+  const [isTestingWs, setIsTestingWs] = React.useState(false);
   const [cropImage, setCropImage] = React.useState<{ src: string, field: keyof AppSettings } | null>(null);
   const [passwordStatus, setPasswordStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
   const [oldPassword, setOldPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [storageInfo, setStorageInfo] = React.useState<{ currentPath: string; defaultPath: string; isCustom: boolean; configuredPath: string } | null>(null);
+  const [storageStatus, setStorageStatus] = React.useState<{ type: 'error' | 'success' | 'info'; message: string; needRestart?: boolean } | null>(null);
+  const [isChangingStorage, setIsChangingStorage] = React.useState(false);
+
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.isElectron;
+
+  const loadStorageInfo = React.useCallback(async () => {
+    if (window.electronAPI?.getStorageInfo) {
+      try {
+        const info = await window.electronAPI.getStorageInfo();
+        setStorageInfo(info);
+      } catch (err) {
+        console.error('获取存储目录信息失败:', err);
+      }
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (open) {
+      loadStorageInfo();
+    }
+  }, [open, loadStorageInfo]);
+
+  const handleSelectStoragePath = async () => {
+    if (!window.electronAPI?.selectStoragePath) return;
+    setIsChangingStorage(true);
+    setStorageStatus(null);
+    try {
+      const res = await window.electronAPI.selectStoragePath();
+      if (!res.canceled && res.selectedPath) {
+        const setRes = await window.electronAPI.setStoragePath(res.selectedPath);
+        if (setRes.success) {
+          setStorageStatus({
+            type: 'success',
+            message: `已设置新目录：${res.selectedPath}（需重启软件生效）`,
+            needRestart: true,
+          });
+          await loadStorageInfo();
+        } else {
+          setStorageStatus({ type: 'error', message: setRes.error || '保存路径配置失败' });
+        }
+      }
+    } catch (err: any) {
+      setStorageStatus({ type: 'error', message: err.message || '选择目录失败' });
+    } finally {
+      setIsChangingStorage(false);
+    }
+  };
+
+  const handleResetStoragePath = async () => {
+    if (!window.electronAPI?.setStoragePath) return;
+    try {
+      const res = await window.electronAPI.setStoragePath(null);
+      if (res.success) {
+        setStorageStatus({
+          type: 'info',
+          message: '已恢复系统默认存储目录（需重启软件生效）',
+          needRestart: true,
+        });
+        await loadStorageInfo();
+      }
+    } catch (err: any) {
+      setStorageStatus({ type: 'error', message: err.message || '恢复默认失败' });
+    }
+  };
+
+  const handleOpenStorageFolder = async () => {
+    if (!window.electronAPI?.openStorageFolder) return;
+    try {
+      await window.electronAPI.openStorageFolder(storageInfo?.currentPath);
+    } catch (err: any) {
+      setStorageStatus({ type: 'error', message: err.message || '打开目录失败' });
+    }
+  };
+
+  const handleRelaunch = async () => {
+    if (window.electronAPI?.relaunchApp) {
+      await window.electronAPI.relaunchApp();
+    }
+  };
 
   React.useEffect(() => {
     if (!open) {
@@ -67,70 +152,124 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
       setNewPassword('');
       setConfirmPassword('');
     }
-    setLocalSettings(settings);
+    let initialOpacity = settings.backgroundOpacity;
+    if (initialOpacity != null && initialOpacity <= 1 && initialOpacity > 0) {
+      initialOpacity = Math.round(initialOpacity * 100);
+    } else if (initialOpacity == null) {
+      initialOpacity = 100;
+    }
+    setLocalSettings({ ...settings, backgroundOpacity: initialOpacity });
   }, [settings, open]);
 
   const fetchModels = async (endpoint: string) => {
-    if (!endpoint.trim()) return;
+    if (!endpoint || !endpoint.trim()) return;
     
-    let sanitized = endpoint.trim();
-    if (!sanitized.startsWith('http://') && !sanitized.startsWith('https://')) {
-      sanitized = `https://${sanitized}`;
-    }
-    if (!sanitized.endsWith('/v1') && !sanitized.endsWith('/v1/')) {
-      sanitized = `${sanitized.replace(/\/$/, '')}/v1`;
-    }
-
     setIsFetchingModels(true);
     setModelFetchStatus(null);
 
-    try {
-      const options = {
-        url: `${sanitized}/models`,
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${localSettings.apiKey || 'lm-studio'}`,
-          'Content-Type': 'application/json',
-        },
-        connectTimeout: 10000,
-        readTimeout: 10000,
-      };
+    const isVolces = endpoint.includes('volces.com') || endpoint.includes('volcengine.com');
+    const isAliyun = endpoint.includes('dashscope.aliyuncs.com');
+    const isZhipu = endpoint.includes('open.bigmodel.cn');
+    const isBaidu = endpoint.includes('qianfan.baidubce.com');
+    const isMiniMax = endpoint.includes('api.minimax.chat');
+    const isOllama = endpoint.includes('11434') || endpoint.includes('ollama');
 
-      const response = await CapacitorHttp.request(options);
+    const base = normalizeApiBaseUrl(endpoint);
+    const candidateUrls = [
+      `${base}/models`,
+      ...(isVolces ? [`${base}/endpoints`, `${base}/bots`] : []),
+      ...(isOllama ? [`${base.replace(/\/v1$/, '')}/api/tags`] : []),
+    ];
 
-      if (response.status >= 200 && response.status < 300) {
-        const data = response.data;
-        let models: string[] = [];
+    let foundModels: string[] = [];
+    let lastError: string = '';
 
-        if (data && Array.isArray(data.data)) {
-          models = data.data.map((m: any) => m.id || m.name).filter(Boolean);
-        } else if (Array.isArray(data)) {
-          models = data.map((m: any) => m.id || m.name || m).filter(Boolean);
-        }
+    for (const url of candidateUrls) {
+      try {
+        const options = {
+          url: url,
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${localSettings.apiKey || 'lm-studio'}`,
+            'Content-Type': 'application/json',
+          },
+          connectTimeout: 8000,
+          readTimeout: 8000,
+        };
 
-        if (models.length > 0) {
-          models.sort((a, b) => a.localeCompare(b));
-          const defaultModel = models[0];
-          setLocalSettings(prev => ({
-            ...prev,
-            availableModels: models,
-            modelName: prev.modelName && models.includes(prev.modelName) ? prev.modelName : defaultModel,
-          }));
-          setModelFetchStatus({ type: 'success', message: `发现 ${models.length} 个模型` });
+        const response = await CapacitorHttp.request(options);
+
+        if (response.status >= 200 && response.status < 300) {
+          const data = response.data;
+          let list: any[] = [];
+
+          if (data && Array.isArray(data.data)) list = data.data;
+          else if (data && Array.isArray(data.items)) list = data.items;
+          else if (data && Array.isArray(data.endpoints)) list = data.endpoints;
+          else if (data && Array.isArray(data.bots)) list = data.bots;
+          else if (data && Array.isArray(data.models)) list = data.models; // Ollama /api/tags
+          else if (Array.isArray(data)) list = data;
+
+          const extracted = list
+            .map((m: any) => m.id || m.name || m.endpoint_id || m.model || m.model_name)
+            .filter(Boolean);
+
+          if (extracted.length > 0) {
+            foundModels = Array.from(new Set([...foundModels, ...extracted]));
+          }
         } else {
-          setModelFetchStatus({ type: 'error', message: '未发现可用模型' });
+          const serverMsg = response.data?.error?.message || response.data?.message || response.data?.msg || `HTTP ${response.status}`;
+          lastError = serverMsg;
         }
-      } else {
-        setModelFetchStatus({ type: 'error', message: `请求失败: HTTP ${response.status}` });
+      } catch (e: any) {
+        lastError = e?.message || '网络连接超时';
       }
-    } catch (error) {
-      console.error('Fetch models error:', error);
-      const errorMessage = error instanceof Error ? error.message : '请检查 API 地址及是否支持 CORS';
-      const displayMessage = errorMessage === 'Failed to fetch' ? '模型获取失败，请手动输入' : `连接失败: ${errorMessage}`;
-      setModelFetchStatus({ type: 'error', message: displayMessage });
-    } finally {
-      setIsFetchingModels(false);
     }
+
+    if (foundModels.length > 0) {
+      foundModels.sort((a, b) => a.localeCompare(b));
+      const defaultModel = foundModels[0];
+      setLocalSettings(prev => ({
+        ...prev,
+        availableModels: foundModels,
+        modelName: prev.modelName && foundModels.includes(prev.modelName) ? prev.modelName : defaultModel,
+      }));
+      setModelFetchStatus({ type: 'success', message: `发现 ${foundModels.length} 个可用模型/接入点` });
+    } else {
+      if (isVolces) {
+        setModelFetchStatus({ 
+          type: 'error', 
+          message: '火山方舟已限制 API 遍历权限。请直接在上方“模型名称”手动填写接入点 ID，即可正常发起对话' 
+        });
+      } else if (isAliyun) {
+        setModelFetchStatus({ 
+          type: 'error', 
+          message: '阿里百炼/通义千问已限制模型遍历。请直接在上方“模型名称”填写模型名（例如 qwen-plus、qwen-max、qwen-turbo、qwen2.5-72b-instruct）即可正常使用' 
+        });
+      } else if (isZhipu) {
+        setModelFetchStatus({ 
+          type: 'error', 
+          message: '智谱 AI (GLM) 未开放模型列表遍历权限。请在上方“模型名称”手动填写（例如 glm-4-plus、glm-4-flash、glm-4-air、glm-4v）即可正常使用' 
+        });
+      } else if (isBaidu) {
+        setModelFetchStatus({ 
+          type: 'error', 
+          message: '百度千帆已限制 API 遍历权限。请在上方“模型名称”手动填写模型名（例如 ernie-4.0-8k、ernie-3.5-8k）即可正常使用' 
+        });
+      } else if (isMiniMax) {
+        setModelFetchStatus({ 
+          type: 'error', 
+          message: 'MiniMax 已限制模型遍历。请在上方“模型名称”手动填写（例如 abab6.5s-chat、MiniMax-Text-01）即可正常使用' 
+        });
+      } else {
+        setModelFetchStatus({ 
+          type: 'error', 
+          message: lastError ? `获取失败: ${lastError}（若 API 限制了遍历，可直接在上方手动输入模型名称）` : '未发现可用模型，请手动输入模型名称' 
+        });
+      }
+    }
+
+    setIsFetchingModels(false);
   };
 
   const handlePasswordChange = async () => {
@@ -207,14 +346,149 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     setLocalSettings(prev => ({ ...prev, [field]: '' }));
   };
 
-  const handleSave = () => {
-    let sanitizedEndpoint = localSettings.apiEndpoint ? localSettings.apiEndpoint.trim() : '';
-    if (sanitizedEndpoint && !sanitizedEndpoint.startsWith('http://') && !sanitizedEndpoint.startsWith('https://')) {
-      sanitizedEndpoint = `https://${sanitizedEndpoint}`;
+  const handleTestHttp = async () => {
+    if (!localSettings.funasrHttpEndpoint?.trim()) {
+      setHttpTestStatus({ type: 'error', message: '请先输入转写 HTTP 地址' });
+      return;
     }
+    const targetUrl = normalizeHttpAsrUrl(localSettings.funasrHttpEndpoint);
+    setIsTestingHttp(true);
+    setHttpTestStatus(null);
+
+    try {
+      const dummyWavHeader = new Uint8Array([
+        0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45,
+        0x66, 0x6d, 0x74, 0x20, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+        0x80, 0x3e, 0x00, 0x00, 0x00, 0x7d, 0x00, 0x00, 0x02, 0x00, 0x10, 0x00,
+        0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00
+      ]);
+      const blob = new Blob([dummyWavHeader], { type: 'audio/wav' });
+      const formData = new FormData();
+      formData.append('file', blob, 'test.wav');
+      formData.append('audio_in', blob, 'test.wav');
+
+      const baseUrl = (window as any).Capacitor?.isNativePlatform?.() ? API_BASE_URL : '';
+      let proxyUrl = `${baseUrl}/api/funasr-transcribe?endpoint=${encodeURIComponent(targetUrl)}`;
+      if (localSettings.asrModel) {
+        proxyUrl += `&model=${encodeURIComponent(localSettings.asrModel)}`;
+      }
+      
+      const headers: Record<string, string> = {};
+      const testApiKey = localSettings.asrApiKey || localSettings.apiKey;
+      if (testApiKey) {
+        headers['x-asr-api-key'] = testApiKey;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const res = await fetch(proxyUrl, {
+        method: 'POST',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        setHttpTestStatus({ type: 'success', message: '连接成功：语音转写接口响应正常' });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 400 || res.status === 405 || res.status === 200) {
+          setHttpTestStatus({ type: 'success', message: '连接成功：转写服务在线' });
+        } else {
+          setHttpTestStatus({ type: 'error', message: `服务返回状态码 ${res.status}${data.error ? `: ${data.error}` : ''}` });
+        }
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        setHttpTestStatus({ type: 'error', message: '连接超时，请检查服务地址与网络' });
+      } else {
+        setHttpTestStatus({ type: 'error', message: err.message || '连接失败，请检查网络与端口' });
+      }
+    } finally {
+      setIsTestingHttp(false);
+    }
+  };
+
+  const handleTestWs = () => {
+    if (!localSettings.funasrWsEndpoint?.trim()) {
+      setWsTestStatus({ type: 'error', message: '请先输入实时流 WS 地址' });
+      return;
+    }
+    const targetWsUrl = normalizeWsAsrUrl(localSettings.funasrWsEndpoint);
+    setIsTestingWs(true);
+    setWsTestStatus(null);
+
+    const isNativeApp = typeof window !== 'undefined' && (
+      window.location.protocol === 'file:' || 
+      window.location.protocol === 'capacitor:' || 
+      !!(window as any).Capacitor?.isNativePlatform?.() ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1'
+    );
+
+    let finalWsUrl = targetWsUrl;
+    if (!isNativeApp && !targetWsUrl.includes('/api/funasr-ws')) {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host;
+      if (host && window.location.protocol.startsWith('http')) {
+        finalWsUrl = `${protocol}//${host}/api/funasr-ws?endpoint=${encodeURIComponent(targetWsUrl)}`;
+      }
+    }
+
+    try {
+      const ws = new WebSocket(finalWsUrl, 'binary');
+      let isDone = false;
+      const timeoutId = setTimeout(() => {
+        if (!isDone) {
+          isDone = true;
+          try { ws.close(); } catch (_) {}
+          setWsTestStatus({ type: 'error', message: '连接超时，请检查 WS 地址与端口' });
+          setIsTestingWs(false);
+        }
+      }, 5000);
+
+      ws.onopen = () => {
+        if (!isDone) {
+          isDone = true;
+          clearTimeout(timeoutId);
+          setWsTestStatus({ type: 'success', message: '连接成功：WebSocket 实时流服务就绪' });
+          setIsTestingWs(false);
+          try { ws.close(); } catch (_) {}
+        }
+      };
+
+      ws.onerror = (e) => {
+        if (!isDone) {
+          isDone = true;
+          clearTimeout(timeoutId);
+          setWsTestStatus({ type: 'error', message: 'WebSocket 连接失败，请检查端口是否开放' });
+          setIsTestingWs(false);
+        }
+      };
+    } catch (e: any) {
+      setWsTestStatus({ type: 'error', message: e.message || '创建 WebSocket 失败' });
+      setIsTestingWs(false);
+    }
+  };
+
+  const handleSave = () => {
+    let validOpacity = localSettings.backgroundOpacity;
+    if (validOpacity == null || isNaN(validOpacity)) {
+      validOpacity = 100;
+    } else {
+      validOpacity = Math.min(100, Math.max(0, Math.round(validOpacity)));
+    }
+
     const updatedSettings = {
       ...localSettings,
-      apiEndpoint: sanitizedEndpoint
+      apiEndpoint: localSettings.apiEndpoint?.trim() || '',
+      funasrHttpEndpoint: localSettings.funasrHttpEndpoint?.trim() || '',
+      funasrWsEndpoint: localSettings.funasrWsEndpoint?.trim() || '',
+      asrModel: localSettings.asrModel?.trim() || '',
+      asrApiKey: localSettings.asrApiKey?.trim() || '',
+      backgroundOpacity: validOpacity
     };
     onSave(updatedSettings);
     onOpenChange(false);
@@ -318,7 +592,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           </div>
           <div className="grid grid-cols-4 items-start gap-4">
             <Label htmlFor="apiEndpoint" className="text-right text-xs mt-2.5">API 终端</Label>
-            <div className="col-span-3 flex flex-col gap-2">
+            <div className="col-span-3 flex flex-col gap-1.5">
               <Input 
                 id="apiEndpoint" 
                 name="apiEndpoint" 
@@ -326,10 +600,13 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 onChange={handleChange}
                 className="h-8 text-xs flex-1" 
               />
+              <span className="text-[10px] text-muted-foreground">
+                支持智能识别各类模型服务（如火山方舟 /api/v3、DeepSeek、OpenAI 等），自动防止重复拼接
+              </span>
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs transition-all hover:bg-primary/10 hover:text-primary active:scale-95"
+                className="h-8 text-xs transition-all hover:bg-primary/10 hover:text-primary active:scale-95 mt-0.5"
                 onClick={() => fetchModels(localSettings.apiEndpoint)}
                 disabled={isFetchingModels}
               >
@@ -356,26 +633,88 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
           <FileUploadField label="自定义背景" field="customBackground" placeholder="应用自定义壁纸" />
           
           <div className="grid grid-cols-4 items-center gap-4">
+            <Label className="text-right text-xs flex items-center justify-end gap-1">
+              <Type className="w-3 h-3 text-muted-foreground" />
+              字体大小
+            </Label>
+            <div className="col-span-3 flex flex-col gap-1.5">
+              <div className="grid grid-cols-4 gap-1.5 p-1 bg-muted/40 rounded-lg border border-border/50">
+                {[
+                  { value: 'sm', label: '小号', size: '13px' },
+                  { value: 'base', label: '标准', size: '15px' },
+                  { value: 'lg', label: '大号', size: '16px' },
+                  { value: 'xl', label: '特大', size: '18px' },
+                ].map((item) => {
+                  const isSelected = (localSettings.chatFontSize || 'base') === item.value;
+                  return (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => setLocalSettings(prev => ({ ...prev, chatFontSize: item.value as any }))}
+                      className={cn(
+                        "flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-medium transition-all",
+                        isSelected 
+                          ? "bg-primary text-primary-foreground shadow-sm scale-[1.02]" 
+                          : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      <span className="text-[11px] leading-none">{item.label}</span>
+                      <span className="text-[9px] opacity-70 leading-none mt-0.5 font-mono">{item.size}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className={cn(
+                "p-2 rounded bg-muted/20 border border-border/40 text-muted-foreground transition-all flex items-center justify-between",
+                (localSettings.chatFontSize === 'sm') && "text-xs",
+                (localSettings.chatFontSize === 'base' || !localSettings.chatFontSize) && "text-[14px]",
+                (localSettings.chatFontSize === 'lg') && "text-[16px]",
+                (localSettings.chatFontSize === 'xl') && "text-[18px]",
+              )}>
+                <span className="truncate">预览：这是一条示例聊天消息文本效果</span>
+                <span className="text-[10px] font-mono opacity-60 ml-2 shrink-0">
+                  {localSettings.chatFontSize === 'sm' ? '13px' : localSettings.chatFontSize === 'lg' ? '16px' : localSettings.chatFontSize === 'xl' ? '18px' : '15px (默认)'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="backgroundOpacity" className="text-right text-xs">透明度</Label>
-            <Input 
-              id="backgroundOpacity" 
-              name="backgroundOpacity" 
-              type="number"
-              step="0.1"
-              min="0"
-              max="1"
-              value={localSettings.backgroundOpacity == null ? '' : localSettings.backgroundOpacity} 
-              onChange={(e) => {
-                const val = e.target.value;
-                setLocalSettings(prev => ({ ...prev, backgroundOpacity: val === '' ? undefined : parseFloat(val) }));
-              }}
-              onBlur={(e) => {
-                if (localSettings.backgroundOpacity == null) {
-                  setLocalSettings(prev => ({ ...prev, backgroundOpacity: 0 }));
-                }
-              }}
-              className="col-span-3 h-8 text-xs" 
-            />
+            <div className="col-span-3 flex items-center gap-2">
+              <Input 
+                id="backgroundOpacity" 
+                name="backgroundOpacity" 
+                type="number"
+                step="1"
+                min="0"
+                max="100"
+                value={localSettings.backgroundOpacity == null ? '' : localSettings.backgroundOpacity} 
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '') {
+                    setLocalSettings(prev => ({ ...prev, backgroundOpacity: undefined }));
+                  } else {
+                    const num = parseInt(val, 10);
+                    if (!isNaN(num)) {
+                      const clamped = Math.min(100, Math.max(0, num));
+                      setLocalSettings(prev => ({ ...prev, backgroundOpacity: clamped }));
+                    }
+                  }
+                }}
+                onBlur={() => {
+                  const val = localSettings.backgroundOpacity;
+                  if (val == null || isNaN(val)) {
+                    setLocalSettings(prev => ({ ...prev, backgroundOpacity: 100 }));
+                  } else {
+                    setLocalSettings(prev => ({ ...prev, backgroundOpacity: Math.min(100, Math.max(0, val)) }));
+                  }
+                }}
+                className="h-8 text-xs flex-1" 
+                placeholder="0 - 100"
+              />
+              <span className="text-xs text-muted-foreground">%</span>
+            </div>
           </div>
           
           <div className="grid grid-cols-4 items-center gap-4">
@@ -461,29 +800,190 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
           <div className="border-t pt-4 mt-2">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-xs font-semibold">语音转写设置 (FunASR)</h4>
+              <h4 className="text-xs font-semibold">语音转写设置 (商用云转写 / FunASR)</h4>
             </div>
+
+            {/* Quick Provider Presets */}
+            <div className="mb-3">
+              <div className="text-[11px] text-muted-foreground mb-1.5 font-medium">常用商用服务商快捷预设：</div>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px] px-2 py-0"
+                  onClick={() => {
+                    setLocalSettings(prev => ({
+                      ...prev,
+                      funasrHttpEndpoint: 'api.siliconflow.cn',
+                      asrModel: 'FunAudioLLM/SenseVoiceSmall',
+                    }));
+                  }}
+                >
+                  ⚡ 硅基流动 SenseVoice
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px] px-2 py-0"
+                  onClick={() => {
+                    setLocalSettings(prev => ({
+                      ...prev,
+                      funasrHttpEndpoint: 'api.groq.com',
+                      asrModel: 'whisper-large-v3-turbo',
+                    }));
+                  }}
+                >
+                  🚀 Groq Whisper
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px] px-2 py-0"
+                  onClick={() => {
+                    setLocalSettings(prev => ({
+                      ...prev,
+                      funasrHttpEndpoint: 'api.openai.com',
+                      asrModel: 'whisper-1',
+                    }));
+                  }}
+                >
+                  🌐 OpenAI Whisper
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px] px-2 py-0"
+                  onClick={() => {
+                    setLocalSettings(prev => ({
+                      ...prev,
+                      funasrHttpEndpoint: 'dashscope.aliyuncs.com',
+                      asrModel: 'sensevoice-v1',
+                    }));
+                  }}
+                >
+                  ☁️ 阿里百炼
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px] px-2 py-0"
+                  onClick={() => {
+                    setLocalSettings(prev => ({
+                      ...prev,
+                      funasrHttpEndpoint: '192.168.1.100:10095',
+                      funasrWsEndpoint: '192.168.1.100:10096',
+                      asrModel: '',
+                    }));
+                  }}
+                >
+                  🤖 自建 FunASR
+                </Button>
+              </div>
+            </div>
+
             <div className="space-y-3">
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="funasrHttpEndpoint" className="text-right text-xs">转写 HTTP</Label>
+                <div className="col-span-3 flex items-center gap-2">
+                  <Input 
+                    id="funasrHttpEndpoint" 
+                    name="funasrHttpEndpoint" 
+                    value={localSettings.funasrHttpEndpoint || ''} 
+                    onChange={handleChange} 
+                    className="h-8 text-xs flex-1" 
+                  />
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleTestHttp} 
+                    disabled={isTestingHttp || !localSettings.funasrHttpEndpoint}
+                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0"
+                  >
+                    {isTestingHttp ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    测试
+                  </Button>
+                </div>
+              </div>
+
+              {httpTestStatus && (
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="col-start-2 col-span-3">
+                    <div className={cn(
+                      "text-[11px] p-2 rounded-md",
+                      httpTestStatus.type === 'error' ? "bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-400" : "bg-green-50 text-green-600 dark:bg-green-950/50 dark:text-green-400"
+                    )}>
+                      {httpTestStatus.message}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="asrModel" className="text-right text-xs">转写模型</Label>
                 <Input 
-                  id="funasrHttpEndpoint" 
-                  name="funasrHttpEndpoint" 
-                  value={localSettings.funasrHttpEndpoint || ''} 
+                  id="asrModel" 
+                  name="asrModel" 
+                  value={localSettings.asrModel || ''} 
                   onChange={handleChange} 
+                  placeholder="例如：whisper-1 / FunAudioLLM/SenseVoiceSmall"
                   className="col-span-3 h-8 text-xs" 
                 />
               </div>
+
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="asrApiKey" className="text-right text-xs">转写 Key</Label>
+                <Input 
+                  id="asrApiKey" 
+                  name="asrApiKey" 
+                  type="password"
+                  value={localSettings.asrApiKey || ''} 
+                  onChange={handleChange} 
+                  placeholder="留空则自动复用上方全局 API Key"
+                  className="col-span-3 h-8 text-xs" 
+                />
+              </div>
+
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="funasrWsEndpoint" className="text-right text-xs">实时流 WS</Label>
-                <Input 
-                  id="funasrWsEndpoint" 
-                  name="funasrWsEndpoint" 
-                  value={localSettings.funasrWsEndpoint || ''} 
-                  onChange={handleChange} 
-                  className="col-span-3 h-8 text-xs" 
-                />
+                <div className="col-span-3 flex items-center gap-2">
+                  <Input 
+                    id="funasrWsEndpoint" 
+                    name="funasrWsEndpoint" 
+                    value={localSettings.funasrWsEndpoint || ''} 
+                    onChange={handleChange} 
+                    className="h-8 text-xs flex-1" 
+                  />
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleTestWs} 
+                    disabled={isTestingWs || !localSettings.funasrWsEndpoint}
+                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0"
+                  >
+                    {isTestingWs ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    测试
+                  </Button>
+                </div>
               </div>
+              {wsTestStatus && (
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="col-start-2 col-span-3">
+                    <div className={cn(
+                      "text-[11px] p-2 rounded-md",
+                      wsTestStatus.type === 'error' ? "bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-400" : "bg-green-50 text-green-600 dark:bg-green-950/50 dark:text-green-400"
+                    )}>
+                      {wsTestStatus.message}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -590,6 +1090,100 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   {isChecking ? '检测中...' : '检测新版本'}
                 </Button>
               </div>
+            </div>
+          </div>
+
+          <div className="border-t pt-4 mt-2">
+            <h4 className="text-xs font-semibold mb-3 flex items-center justify-between text-blue-500">
+              <span className="flex items-center gap-1.5">
+                <HardDrive className="w-3.5 h-3.5" />
+                桌面端数据与缓存目录
+              </span>
+              {isElectron && storageInfo?.isCustom && (
+                <span className="text-[10px] text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20 font-normal">
+                  自定义路径
+                </span>
+              )}
+            </h4>
+            
+            <div className="space-y-3">
+              <div className="p-2.5 rounded-lg border bg-muted/20 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">当前存储路径：</span>
+                </div>
+                <div 
+                  className="text-[11px] font-mono bg-background/80 p-2 rounded border break-all select-all text-foreground/90 max-h-20 overflow-y-auto"
+                  title={storageInfo?.currentPath || '默认 Windows 用户目录 (%APPDATA%)'}
+                >
+                  {storageInfo?.currentPath || (isElectron ? '正在读取中...' : '桌面端运行模式下可自定义路径 (默认 %APPDATA%)')}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1 hover:bg-blue-500/10 hover:text-blue-500 transition-all active:scale-95"
+                  onClick={handleSelectStoragePath}
+                  disabled={isChangingStorage || !isElectron}
+                  title={!isElectron ? '仅在 Windows 桌面端运行环境有效' : '自定义选择新的缓存与数据盘符目录'}
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  {isChangingStorage ? '选择中...' : '更改目录'}
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1 hover:bg-blue-500/10 hover:text-blue-500 transition-all active:scale-95"
+                  onClick={handleOpenStorageFolder}
+                  disabled={!isElectron}
+                  title={!isElectron ? '仅在 Windows 桌面端运行环境有效' : '在 Windows 资源管理器中打开该目录'}
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  打开目录
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1 hover:bg-destructive/10 hover:text-destructive transition-all active:scale-95"
+                  onClick={handleResetStoragePath}
+                  disabled={!isElectron || !storageInfo?.isCustom}
+                  title="恢复为系统默认目录"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  恢复默认
+                </Button>
+              </div>
+
+              <AnimatePresence>
+                {storageStatus && (
+                  <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className={cn(
+                      "text-[10px] p-2.5 rounded-lg border flex flex-col gap-2",
+                      storageStatus.type === 'error' ? "bg-destructive/10 border-destructive/20 text-destructive" : "bg-blue-500/10 border-blue-500/20 text-blue-500"
+                    )}
+                  >
+                    <div>{storageStatus.message}</div>
+                    {storageStatus.needRestart && (
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          className="h-7 text-[11px] px-2.5 bg-blue-600 hover:bg-blue-700 text-white gap-1 shadow-sm active:scale-95"
+                          onClick={handleRelaunch}
+                        >
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                          立即重启生效
+                        </Button>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
 

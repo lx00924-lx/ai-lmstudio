@@ -13,6 +13,7 @@ export interface Message {
   type: 'text' | 'voice' | 'image';
   mediaUrl?: string;
   transcribedText?: string;
+  status?: 'generating' | 'completed' | 'error';
   quote?: {
     id: string;
     userName: string;
@@ -44,7 +45,11 @@ export interface AppSettings {
   contextLength?: number;
   funasrHttpEndpoint?: string;
   funasrWsEndpoint?: string;
+  asrProvider?: 'funasr' | 'siliconflow' | 'groq' | 'openai' | 'dashscope' | 'custom';
+  asrApiKey?: string;
+  asrModel?: string;
   showDebugFloatButton?: boolean;
+  chatFontSize?: 'sm' | 'base' | 'lg' | 'xl';
 }
 
 export interface ChatState {
@@ -52,4 +57,25 @@ export interface ChatState {
   isLoading: boolean;
   error: string | null;
   settings: AppSettings;
+}
+
+export interface ElectronStorageInfo {
+  currentPath: string;
+  defaultPath: string;
+  isCustom: boolean;
+  configuredPath: string;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      platform: string;
+      isElectron?: boolean;
+      getStorageInfo: () => Promise<ElectronStorageInfo>;
+      selectStoragePath: () => Promise<{ canceled: boolean; selectedPath?: string }>;
+      setStoragePath: (newPath: string | null) => Promise<{ success: boolean; error?: string }>;
+      openStorageFolder: (targetPath?: string) => Promise<{ success: boolean; error?: string }>;
+      relaunchApp: () => Promise<void>;
+    };
+  }
 }

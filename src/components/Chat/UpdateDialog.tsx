@@ -25,6 +25,9 @@ interface UpdateDialogProps {
   downloadUrl: string;
   onUpdate?: () => void;
   isUpdating?: boolean;
+  progress?: number;
+  platformType?: 'windows' | 'android' | 'web';
+  targetFileName?: string;
 }
 
 export const UpdateDialog: React.FC<UpdateDialogProps> = ({
@@ -35,9 +38,12 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
   downloadUrl,
   onUpdate,
   isUpdating = false,
+  progress = 0,
+  platformType = 'android',
+  targetFileName,
 }) => {
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+    <Dialog open={isOpen} onOpenChange={(open) => !isUpdating && !open && onClose()}>
       <DialogContent 
         className="sm:max-w-[450px] bg-white dark:bg-card border-border text-foreground z-[9999]"
       >
@@ -46,11 +52,18 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
             <div className="p-2 rounded-xl bg-primary/10 text-primary">
               <Rocket size={20} />
             </div>
-            <DialogTitle className="text-xl">发现新版本！</DialogTitle>
+            <DialogTitle className="text-xl">
+              发现新版本！
+            </DialogTitle>
           </div>
-          <DialogDescription className="text-sm font-medium text-primary">
-            最新版本: {version}
-          </DialogDescription>
+          <div className="flex items-center gap-2">
+            <DialogDescription className="text-sm font-medium text-primary">
+              最新版本: {version}
+            </DialogDescription>
+            <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-primary/10 text-primary border border-primary/20">
+              {platformType === 'windows' ? 'Windows 安装包 (.exe)' : platformType === 'android' ? 'Android 安装包 (.apk)' : 'Web/通用'}
+            </span>
+          </div>
         </DialogHeader>
         
         <div className="my-4 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
@@ -61,11 +74,20 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
         </div>
 
         {isUpdating && (
-          <div className="mb-4">
-            <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
-              <div className="h-full bg-primary animate-pulse w-full"></div>
+          <div className="mb-4 space-y-1.5">
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>{progress > 0 ? `下载进度 ${progress}%` : '正在下载更新包...'}</span>
+              <span>{progress > 0 ? `${progress}%` : '请稍候'}</span>
             </div>
-            <p className="text-xs text-center mt-2 text-muted-foreground">正在下载更新包...</p>
+            <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-primary transition-all duration-300 ease-out" 
+                style={{ width: `${Math.max(5, progress)}%` }}
+              />
+            </div>
+            <p className="text-[11px] text-center text-muted-foreground pt-1">
+              {platformType === 'windows' ? '下载完成后将自动启动 Windows 安装程序' : '下载完成后将自动调起系统安装器'}
+            </p>
           </div>
         )}
 
@@ -87,7 +109,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
               }
             }}
           >
-            {isUpdating ? '更新中...' : (
+            {isUpdating ? '正在下载更新...' : (
               <>
                 <Rocket size={16} className="mr-2" />
                 立即更新

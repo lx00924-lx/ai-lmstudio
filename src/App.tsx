@@ -75,9 +75,19 @@ const DEFAULT_SETTINGS: AppSettings = {
   splashImage: '',
   splashSubtitle: 'Loading AI Experience',
   splashDuration: 1000,
-  backgroundOpacity: 0.2,
+  backgroundOpacity: 100,
   showBackgroundInDarkMode: true,
   showDebugFloatButton: true,
+  chatFontSize: 'base',
+};
+
+// Storage key helpers for local-first persistence
+const getMessageStorageKey = (userId?: string | null) => {
+  return userId && userId !== 'guest' ? `chat_messages_${userId}` : 'guest_messages';
+};
+
+const getSettingsStorageKey = (userId?: string | null) => {
+  return userId && userId !== 'guest' ? `gemini_settings_${userId}` : 'gemini_settings';
 };
 
 export default function App() {
@@ -86,7 +96,6 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDeleteHistoryOpen, setIsDeleteHistoryOpen] = useState(false);
   const [isCallOpen, setIsCallOpen] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string; url: string; apkUrl?: string } | null>(null);
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,11 +111,20 @@ export default function App() {
   });
 
   const [state, setState] = useState<ChatState>(() => {
-    const savedGuest = localStorage.getItem('guest_messages');
-    const messages = savedGuest ? JSON.parse(savedGuest).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })) : [];
+    const savedUser = localStorage.getItem('app_user');
+    const parsedUser = savedUser ? JSON.parse(savedUser) : null;
+    const storageKey = getMessageStorageKey(parsedUser?.id);
     
-    // Load saved settings if they exist
-    const savedSettings = localStorage.getItem('gemini_settings');
+    // 优先读取当前用户的本地离线消息，若无则回退检查 guest_messages
+    let rawMessages = localStorage.getItem(storageKey);
+    if (!rawMessages && parsedUser?.id && parsedUser.id !== 'guest') {
+      rawMessages = localStorage.getItem('guest_messages');
+    }
+    const messages = rawMessages ? JSON.parse(rawMessages).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })) : [];
+    
+    // 加载当前用户或全局设置
+    const settingsKey = getSettingsStorageKey(parsedUser?.id);
+    const savedSettings = localStorage.getItem(settingsKey) || localStorage.getItem('gemini_settings');
     const settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS;
 
     return {
@@ -123,8 +141,27 @@ export default function App() {
     localStorage.setItem('app_user', JSON.stringify(userData));
     socket.emit("join_user_room", userData.id);
 
-    // Sync guest messages if they exist
+    // 1. 读取当前用户本地已有的记录，若为空则将游客记录迁移过来
+    const userKey = getMessageStorageKey(userData.id);
+    let userLocalRaw = localStorage.getItem(userKey);
     const guestMessages = localStorage.getItem('guest_messages');
+
+    if (!userLocalRaw && guestMessages && userData.id !== 'guest') {
+      userLocalRaw = guestMessages;
+      localStorage.setItem(userKey, guestMessages);
+      localStorage.removeItem('guest_messages');
+    }
+
+    if (userLocalRaw) {
+      try {
+        const parsed = JSON.parse(userLocalRaw).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }));
+        setState(prev => ({ ...prev, messages: parsed }));
+      } catch (e) {
+        console.error('Failed to parse local user messages:', e);
+      }
+    }
+
+    // 2. 若有未同步的消息，尝试异步上报给后台
     if (guestMessages && userData.id !== 'guest') {
       try {
         const messagesToSync = JSON.parse(guestMessages);
@@ -136,20 +173,18 @@ export default function App() {
         localStorage.removeItem('guest_messages');
         console.log('Guest messages synced.');
       } catch (err) {
-        console.error('Failed to sync guest messages:', err);
+        console.warn('Backend offline, guest messages retained in user local store:', err);
       }
     }
 
-    // Sync guest settings if they exist
+    // 3. 同步设置
     const guestSettings = localStorage.getItem('gemini_settings');
     if (guestSettings && userData.id !== 'guest') {
       try {
         const settingsToSync = JSON.parse(guestSettings);
         socket.emit("update_settings", { userId: userData.id, settings: settingsToSync });
-        
-        console.log('Guest settings synced.');
       } catch (err) {
-        console.error('Failed to sync guest settings:', err);
+        console.warn('Failed to sync guest settings:', err);
       }
     }
   };
@@ -157,42 +192,93 @@ export default function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('app_user');
-    setState(prev => ({ ...prev, messages: [], settings: DEFAULT_SETTINGS }));
+    const guestRaw = localStorage.getItem('guest_messages');
+    const guestMessages = guestRaw ? JSON.parse(guestRaw).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })) : [];
+    const guestSettingsRaw = localStorage.getItem('gemini_settings');
+    const guestSettings = guestSettingsRaw ? { ...DEFAULT_SETTINGS, ...JSON.parse(guestSettingsRaw) } : DEFAULT_SETTINGS;
+    
+    setState(prev => ({ ...prev, messages: guestMessages, settings: guestSettings }));
     setIsSidebarOpen(false);
   };
 
-  // Fetch messages AND settings from server when user is logged in
+  // Local-First + Server Auto-Sync
   useEffect(() => {
-    if (!user) return;
+    if (!user || user.id === 'guest') return;
 
-    const initData = async () => {
+    const syncWithServer = async () => {
       try {
-        // Join room immediately on re-mount or login
         socket.emit("join_user_room", user.id);
 
-        // Fetch messages and settings individually
         const [msgRes, settingsRes] = await Promise.allSettled([
           fetch(`${API_BASE_URL}/api/messages/${user.id}`).then(r => r.ok ? r.json() : Promise.reject('Failed to fetch messages')),
           fetch(`${API_BASE_URL}/api/settings/${user.id}`).then(r => r.ok ? r.json() : Promise.reject('Failed to fetch settings'))
         ]);
 
-        const messages = msgRes.status === 'fulfilled' ? msgRes.value : [];
-        const serverSettings = settingsRes.status === 'fulfilled' ? settingsRes.value : {};
+        if (settingsRes.status === 'fulfilled' && settingsRes.value && Object.keys(settingsRes.value).length > 0) {
+          setState(prev => ({
+            ...prev,
+            settings: { ...DEFAULT_SETTINGS, ...prev.settings, ...settingsRes.value }
+          }));
+        }
 
-        setState(prev => ({
-          ...prev,
-          settings: Object.keys(serverSettings).length > 0 ? { ...DEFAULT_SETTINGS, ...serverSettings } : prev.settings,
-          messages: Array.isArray(messages) ? messages.map((m: any) => ({
-            ...m,
-            timestamp: new Date(m.timestamp)
-          })) : []
-        }));
+        if (msgRes.status === 'fulfilled' && Array.isArray(msgRes.value)) {
+          const serverMessages: any[] = msgRes.value;
+          
+          setState(prev => {
+            const currentLocal = prev.messages;
+            const messageMap = new Map<string, Message>();
+            
+            // 1. 放入服务端消息
+            serverMessages.forEach(m => {
+              messageMap.set(m.id, { ...m, timestamp: new Date(m.timestamp) });
+            });
+            
+            // 2. 检查本地未同步至服务端的消息（离线期间创建的）
+            const unsyncedMessages: Message[] = [];
+            currentLocal.forEach(m => {
+              if (!messageMap.has(m.id)) {
+                unsyncedMessages.push(m);
+                messageMap.set(m.id, m);
+              }
+            });
+            
+            // 3. 若有未同步的消息，自动提交给服务端保存
+            if (unsyncedMessages.length > 0) {
+              fetch(`${API_BASE_URL}/api/sync-messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: user.id, messages: unsyncedMessages })
+              }).then(() => {
+                console.log(`[Auto-Sync] Synced ${unsyncedMessages.length} offline messages to server.`);
+              }).catch(e => console.warn('[Auto-Sync] Server sync queued:', e));
+            }
+
+            const merged = Array.from(messageMap.values()).sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+
+            const hasGenerating = merged.some(m => m.status === 'generating');
+
+            return {
+              ...prev,
+              isLoading: hasGenerating ? true : false,
+              messages: merged
+            };
+          });
+        }
       } catch (err) {
-        console.error("Failed to fetch initial data:", err);
+        console.warn("Backend server not running or network error, keeping local messages intact:", err);
       }
     };
 
-    initData();
+    syncWithServer();
+
+    const handleConnect = () => {
+      console.log("Socket connected/reconnected, triggering auto-sync with server...");
+      syncWithServer();
+    };
+
+    socket.on("connect", handleConnect);
 
     socket.on("receive_message", (message: Message) => {
       setState(prev => {
@@ -202,6 +288,63 @@ export default function App() {
           messages: [...prev.messages, { ...message, timestamp: new Date(message.timestamp) }]
         };
       });
+    });
+
+    socket.on("chat_chunk", (data: { messageId: string; chunk: string; fullContent: string }) => {
+      setState(prev => {
+        const exists = prev.messages.some(m => m.id === data.messageId);
+        if (!exists) {
+          return {
+            ...prev,
+            isLoading: true,
+            messages: [
+              ...prev.messages,
+              {
+                id: data.messageId,
+                role: 'assistant',
+                content: data.fullContent,
+                timestamp: new Date(),
+                type: 'text',
+                status: 'generating'
+              }
+            ]
+          };
+        }
+        return {
+          ...prev,
+          isLoading: true,
+          messages: prev.messages.map(msg => 
+            msg.id === data.messageId 
+              ? { ...msg, content: data.fullContent, status: 'generating' } 
+              : msg
+          )
+        };
+      });
+    });
+
+    socket.on("chat_completed", (data: { messageId: string; content: string }) => {
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        messages: prev.messages.map(msg => 
+          msg.id === data.messageId 
+            ? { ...msg, content: data.content, status: 'completed' } 
+            : msg
+        )
+      }));
+    });
+
+    socket.on("chat_error", (data: { messageId: string; error: string }) => {
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: data.error || "生成失败",
+        messages: prev.messages.map(msg => 
+          msg.id === data.messageId 
+            ? { ...msg, status: 'error', content: msg.content || `[生成失败: ${data.error}]` } 
+            : msg
+        )
+      }));
     });
 
     socket.on("message_deleted", (messageId: string) => {
@@ -226,7 +369,11 @@ export default function App() {
     });
 
     return () => {
+      socket.off("connect", handleConnect);
       socket.off("receive_message");
+      socket.off("chat_chunk");
+      socket.off("chat_completed");
+      socket.off("chat_error");
       socket.off("message_deleted");
       socket.off("messages_updated");
       socket.off("settings_updated");
@@ -236,6 +383,27 @@ export default function App() {
   const [quotedMessage, setQuotedMessage] = useState<Message | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(initialTheme);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateInfo, setUpdateInfo] = useState<{
+    version: string;
+    body: string;
+    url: string;
+    downloadUrl?: string;
+    targetFileName?: string;
+    platformType: 'windows' | 'android' | 'web';
+  } | null>(null);
+
+  // 监听 Electron 客户端下载进度
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (window as any).electronAPI?.onDownloadProgress) {
+      const cleanup = (window as any).electronAPI.onDownloadProgress((data: { progress: number }) => {
+        setUpdateProgress(data.progress || 0);
+      });
+      return () => {
+        if (typeof cleanup === 'function') cleanup();
+      };
+    }
+  }, []);
 
 
   // Wake Lock implementation
@@ -351,9 +519,11 @@ export default function App() {
   }, []);
 
 
+  // 持续将消息写入本地存储，确保离线或重启永不丢失
   useEffect(() => {
-    // Message saving to localStorage is removed since we use server sync
-  }, [state.messages]);
+    const key = getMessageStorageKey(user?.id);
+    safeSaveToLocalStorage(key, state.messages);
+  }, [state.messages, user?.id]);
 
   useEffect(() => {
     // Trigger notification when loading finishes and app is in background
@@ -367,9 +537,12 @@ export default function App() {
     }
   }, [state.isLoading, state.messages, state.settings.aiName]);
 
+  // 持续将设置写入本地存储
   useEffect(() => {
+    const key = getSettingsStorageKey(user?.id);
+    safeSaveToLocalStorage(key, state.settings);
     safeSaveToLocalStorage('gemini_settings', state.settings);
-  }, [state.settings]);
+  }, [state.settings, user?.id]);
 
   useEffect(() => {
     safeSaveToLocalStorage('app_theme', theme);
@@ -613,7 +786,7 @@ export default function App() {
     try {
       let result = "";
       if (state.settings.funasrHttpEndpoint) {
-        result = await transcribeAudio(message.mediaUrl, state.settings.funasrHttpEndpoint);
+        result = await transcribeAudio(message.mediaUrl, state.settings);
       } else {
         // Use the existing sendMessageToGemini but with a specific transcription prompt
         const transcriptionPrompt: Message = {
@@ -653,10 +826,11 @@ export default function App() {
       role: 'assistant',
       content: "",
       timestamp: new Date(),
-      type: 'text'
+      type: 'text',
+      status: 'generating'
     };
 
-    // 1. Add Assistant placeholder
+    // 1. Add Assistant placeholder locally
     setState(prev => ({
       ...prev,
       messages: [...prev.messages, assistantMessage],
@@ -664,40 +838,77 @@ export default function App() {
       error: null
     }));
 
-    // 2. Call Gemini
+    const currentUserId = user?.id || 'guest';
+
+    // 2. Dispatch to Server-Side background worker
     try {
-      let assistantMessageContent = "";
-      await sendMessageToGemini(allMessagesSoFar, state.settings, (chunk) => {
-        assistantMessageContent += chunk;
+      if (socket.connected) {
+        socket.emit("start_generation", {
+          userId: currentUserId,
+          assistantMessageId,
+          messages: allMessagesSoFar,
+          settings: state.settings
+        });
+      } else {
+        const baseUrl = (window as any).Capacitor?.isNativePlatform?.() ? API_BASE_URL : '';
+        const res = await fetch(`${baseUrl}/api/chat/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUserId,
+            assistantMessageId,
+            messages: allMessagesSoFar,
+            settings: state.settings
+          })
+        });
+        if (!res.ok) {
+          throw new Error(`Server returned ${res.status}`);
+        }
+      }
+    } catch (serverErr) {
+      console.warn("[Client Chat] Server-side dispatch failed, falling back to direct client-side generation:", serverErr);
+      try {
+        let assistantMessageContent = "";
+        await sendMessageToGemini(allMessagesSoFar, state.settings, (chunk) => {
+          assistantMessageContent += chunk;
+          setState(prev => ({
+            ...prev,
+            messages: prev.messages.map(msg => 
+              msg.id === assistantMessageId 
+                ? { ...msg, content: assistantMessageContent, status: 'generating' } 
+                : msg
+            )
+          }));
+        });
+        
+        const finalMessage: Message = { 
+          ...assistantMessage, 
+          content: assistantMessageContent, 
+          status: 'completed',
+          timestamp: new Date() 
+        };
         setState(prev => ({
           ...prev,
+          isLoading: false,
+          messages: prev.messages.map(msg => msg.id === assistantMessageId ? finalMessage : msg)
+        }));
+        if (user && user.id !== 'guest') {
+          socket.emit("send_message", { userId: user.id, message: finalMessage });
+        }
+      } catch (clientErr: any) {
+        setState(prev => ({
+          ...prev,
+          isLoading: false,
+          error: clientErr instanceof Error ? clientErr.message : "无法获取 AI 响应。请检查设置中的 API Key。",
           messages: prev.messages.map(msg => 
             msg.id === assistantMessageId 
-              ? { ...msg, content: assistantMessageContent } 
+              ? { ...msg, status: 'error', content: `[生成失败: ${clientErr?.message || '未知错误'}]` } 
               : msg
           )
         }));
-      });
-      
-      // 3. Emit final message to socket to save on server
-      const finalMessage = { ...assistantMessage, content: assistantMessageContent, timestamp: new Date() };
-      
-      if (user?.id === 'guest') {
-        const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
-        localStorage.setItem('guest_messages', JSON.stringify([...existing, finalMessage]));
-      } else if (user) {
-        socket.emit("send_message", { userId: user.id, message: finalMessage });
       }
-      
-    } catch (error) {
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : "无法获取 Gemini 的响应。请检查设置中的 API Key。"
-      }));
-    } finally {
-      setState(prev => ({ ...prev, isLoading: false }));
     }
-  }, [state.settings]);
+  }, [state.settings, user]);
 
   useEffect(() => {
     if (!state.isLoading && queueRef.current.length > 0) {
@@ -717,14 +928,14 @@ export default function App() {
     if (type === 'voice' && mediaUrl && state.settings.funasrHttpEndpoint) {
       try {
         setState(prev => ({ ...prev, isLoading: true }));
-        const resText = await transcribeAudio(mediaUrl, state.settings.funasrHttpEndpoint);
+        const resText = await transcribeAudio(mediaUrl, state.settings);
         if (resText) {
           finalContent = resText;
           transcribedText = resText;
         }
       } catch (e) {
         console.error("Auto transcribe voice message error:", e);
-        await Toast.show({ text: "FunASR 语音识别失败，请检查设置中的 HTTP 地址" });
+        await Toast.show({ text: "语音转写失败，请检查转写服务配置" });
       } finally {
         setState(prev => ({ ...prev, isLoading: false }));
       }
@@ -753,18 +964,13 @@ export default function App() {
       return;
     }
 
-    // Add user message to state locally
+    // Add user message to state locally (auto-persists to localStorage via effect)
     setState(prev => ({
       ...prev,
       messages: [...prev.messages, userMessage]
     }));
 
-    if (user?.id === 'guest') {
-      const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
-      localStorage.setItem('guest_messages', JSON.stringify([...existing, userMessage]));
-    }
-
-    // Emit to socket to sync and save
+    // Emit to socket to sync if online
     if (user && user.id !== 'guest') {
       socket.emit("send_message", { userId: user.id, message: userMessage });
     }
@@ -774,22 +980,19 @@ export default function App() {
     } else {
       runGeminiQuery([...state.messages, userMessage]);
     }
-  }, [state.messages, state.settings, quotedMessage, state.isLoading, runGeminiQuery]);
+  }, [state.messages, state.settings, quotedMessage, state.isLoading, runGeminiQuery, user]);
 
   const handleCallEnd = useCallback((newMessages: Message[]) => {
     if (newMessages.length === 0) return;
 
-    // 批量追加到消息列表
+    // 批量追加到消息列表（通过 useEffect 自动持久化）
     setState(prev => ({
       ...prev,
       messages: [...prev.messages, ...newMessages]
     }));
 
-    // 保存并同步
-    if (user?.id === 'guest') {
-      const existing = JSON.parse(localStorage.getItem('guest_messages') || '[]');
-      localStorage.setItem('guest_messages', JSON.stringify([...existing, ...newMessages]));
-    } else if (user) {
+    // 尝试同步至服务器
+    if (user && user.id !== 'guest') {
       newMessages.forEach(msg => {
         socket.emit("send_message", { userId: user.id, message: msg });
       });
@@ -798,6 +1001,26 @@ export default function App() {
     Toast.show({ text: `通话结束，已自动保存对话记录` });
   }, [user]);
 
+
+// 规范化提取版本号中的数字（例如 "AI-apk-v0.0.10" -> "0.0.10", "v0.0.10" -> "0.0.10"）
+function extractSemVer(v: string): string {
+  const match = (v || '').match(/\d+(\.\d+)+/);
+  return match ? match[0] : (v || '').replace(/^v/i, '').trim();
+}
+
+// 语义化版本大小比较：v1 > v2 返回 1，v1 < v2 返回 -1，相等返回 0
+function compareSemVer(v1: string, v2: string): number {
+  const p1 = extractSemVer(v1).split('.').map(n => parseInt(n, 10) || 0);
+  const p2 = extractSemVer(v2).split('.').map(n => parseInt(n, 10) || 0);
+  const maxLen = Math.max(p1.length, p2.length);
+  for (let i = 0; i < maxLen; i++) {
+    const num1 = p1[i] !== undefined ? p1[i] : 0;
+    const num2 = p2[i] !== undefined ? p2[i] : 0;
+    if (num1 > num2) return 1;
+    if (num1 < num2) return -1;
+  }
+  return 0;
+}
 
   const handleCheckUpdate = async (): Promise<{ success: boolean; data?: any; error?: string }> => {
     const { githubOwner, githubRepo } = state.settings;
@@ -822,18 +1045,45 @@ export default function App() {
       
       const data = await response.json();
       const latestVersion = data.tag_name;
-      const currentVersion = localStorage.getItem('app_version') || 'v0.0.10'; 
+      const currentVersion = localStorage.getItem('app_version') || '0.0.10'; 
 
-      // Find APK in assets
-      const apkAsset = data.assets?.find((asset: any) => asset.name.endsWith('.apk'));
-      const apkUrl = apkAsset?.browser_download_url;
+      const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron;
+      const isCapacitorAndroid = typeof window !== 'undefined' && 'Capacitor' in window && (window as any).Capacitor?.getPlatform() === 'android';
 
-      if (latestVersion !== currentVersion) {
+      let platformType: 'windows' | 'android' | 'web' = 'web';
+      if (isElectron) {
+        platformType = 'windows';
+      } else if (isCapacitorAndroid) {
+        platformType = 'android';
+      }
+
+      // 智能匹配资产包：Windows 优先找 .exe/.msi，Android 优先找 .apk
+      const assets: any[] = data.assets || [];
+      let targetAsset = null;
+
+      if (platformType === 'windows') {
+        targetAsset = assets.find((a: any) => a.name.endsWith('.exe') || a.name.endsWith('.msi'))
+          || assets.find((a: any) => a.name.endsWith('.zip'))
+          || assets.find((a: any) => a.name.endsWith('.apk'));
+      } else {
+        targetAsset = assets.find((a: any) => a.name.endsWith('.apk'))
+          || assets.find((a: any) => a.name.endsWith('.exe'));
+      }
+
+      const downloadUrl = targetAsset?.browser_download_url;
+      const targetFileName = targetAsset?.name;
+
+      // 智能语义化版本比较：仅当线上版本大于本地版本时提示更新
+      const hasNewVersion = compareSemVer(latestVersion, currentVersion) > 0 || (latestVersion !== currentVersion && !currentVersion.includes(extractSemVer(latestVersion)));
+
+      if (hasNewVersion) {
         setUpdateInfo({
           version: latestVersion,
           body: data.body,
           url: data.html_url,
-          apkUrl: apkUrl
+          downloadUrl: downloadUrl,
+          targetFileName: targetFileName,
+          platformType: platformType,
         });
         return { success: true };
       } else {
@@ -848,36 +1098,75 @@ export default function App() {
   const handleDownloadAndInstall = async (url: string, fileName: string) => {
     try {
       setIsUpdating(true);
+      setUpdateProgress(0);
       await Toast.show({ text: '开始下载更新包...', duration: 'long' });
       
-      const isWeb = !window.hasOwnProperty('Capacitor') || (window as any).Capacitor?.getPlatform() === 'web';
-      
-      if (isWeb) {
-        window.open(url, '_blank');
-        setIsUpdating(false);
+      const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron;
+      const isCapacitor = typeof window !== 'undefined' && 'Capacitor' in window && (window as any).Capacitor?.getPlatform() !== 'web';
+
+      // 1. Windows Electron 客户端应用内直接下载并自动运行 .exe
+      if (isElectron && (window as any).electronAPI?.downloadAndInstallUpdate) {
+        const result = await (window as any).electronAPI.downloadAndInstallUpdate({
+          url: url,
+          fileName: fileName || `AI-Assistant-Setup.exe`
+        });
+
+        if (result && !result.success) {
+          throw new Error(result.error || '桌面端下载更新失败');
+        }
+        await Toast.show({ text: '下载完成，正在启动安装程序...' });
         return;
       }
 
-      // Capacitor logic for mobile
-      // 1. Download the file
-      const downloadResult = await Filesystem.downloadFile({
-        url: url,
-        path: `Download/${fileName}`,
-        directory: Directory.ExternalStorage,
-      });
+      // 2. Android 移动端原生应用内原生安全下载（零内存溢出风险）
+      if (isCapacitor) {
+        let progressHandle: any = null;
+        try {
+          if (typeof (Filesystem as any).addListener === 'function') {
+            progressHandle = await (Filesystem as any).addListener('progress', (status: { bytes: number; contentLength: number }) => {
+              if (status && status.contentLength > 0) {
+                const percent = Math.min(100, Math.round((status.bytes / status.contentLength) * 100));
+                setUpdateProgress(percent);
+              }
+            });
+          }
+        } catch (e) {
+          console.warn('Progress listener not supported, falling back', e);
+        }
 
-      if (downloadResult.path) {
-        await Toast.show({ text: '下载完成，正在打开安装程序...' });
-        
-        // 2. Open the file
-        await FileOpener.open({
-          filePath: downloadResult.path,
-          contentType: 'application/vnd.android.package-archive'
+        // 使用原生 DownloadFile 流式直接落盘到外部存储，完全规避 JS 堆内存 OOM 崩溃
+        const downloadResult = await Filesystem.downloadFile({
+          url: url,
+          path: `Download/${fileName}`,
+          directory: Directory.ExternalStorage,
+          progress: true,
+          recursive: true,
         });
+
+        if (progressHandle && typeof progressHandle.remove === 'function') {
+          progressHandle.remove();
+        }
+
+        setUpdateProgress(100);
+
+        if (downloadResult && downloadResult.path) {
+          await Toast.show({ text: '下载完成，正在打开安装程序...' });
+          
+          await FileOpener.open({
+            filePath: downloadResult.path,
+            contentType: 'application/vnd.android.package-archive'
+          });
+          return;
+        } else {
+          throw new Error('下载文件路径为空');
+        }
       }
+
+      // 3. Web 网页端 fallback
+      window.open(url, '_blank');
     } catch (error) {
       console.error('Update failed', error);
-      await Toast.show({ text: '更新失败，请前往浏览器手动下载' });
+      await Toast.show({ text: '应用内更新失败，正在为您打开浏览器下载' });
       window.open(url, '_blank');
     } finally {
       setIsUpdating(false);
@@ -1243,7 +1532,11 @@ export default function App() {
               className="absolute inset-0 z-0 pointer-events-none bg-cover bg-center bg-no-repeat"
               style={{ 
                 backgroundImage: `url(${state.settings.customBackground})`,
-                opacity: state.settings.backgroundOpacity ?? 0.2
+                opacity: (() => {
+                  let val = state.settings.backgroundOpacity ?? 100;
+                  if (val <= 1 && val > 0) val = val * 100;
+                  return Math.min(100, Math.max(0, val)) / 100;
+                })()
               }}
             />
           )}
@@ -1365,11 +1658,17 @@ export default function App() {
           onClose={() => setUpdateInfo(null)}
           version={updateInfo.version}
           changelog={updateInfo.body}
-          downloadUrl={updateInfo.apkUrl || updateInfo.url}
+          downloadUrl={updateInfo.downloadUrl || updateInfo.url}
+          targetFileName={updateInfo.targetFileName}
+          platformType={updateInfo.platformType}
+          progress={updateProgress}
           isUpdating={isUpdating}
           onUpdate={() => {
-            if (updateInfo.apkUrl) {
-              handleDownloadAndInstall(updateInfo.apkUrl, `update_${updateInfo.version}.apk`);
+            if (updateInfo.downloadUrl) {
+              const defaultName = updateInfo.platformType === 'windows' 
+                ? `AI-Assistant-Setup-${updateInfo.version}.exe` 
+                : `update_${updateInfo.version}.apk`;
+              handleDownloadAndInstall(updateInfo.downloadUrl, updateInfo.targetFileName || defaultName);
             } else {
               window.open(updateInfo.url, '_blank');
             }

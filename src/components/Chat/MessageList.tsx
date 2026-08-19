@@ -247,6 +247,15 @@ const MessageItem: React.FC<{
   messageRef,
   onRegisterReplay
 }) => {
+  // 动态字号样式映射
+  const fontSizeClasses = {
+    sm: "text-[13px] leading-relaxed",
+    base: "text-[14px] sm:text-[15px] leading-relaxed",
+    lg: "text-[15px] sm:text-[16px] leading-relaxed",
+    xl: "text-[17px] sm:text-[18px] leading-relaxed",
+  };
+  const activeFontSizeClass = fontSizeClasses[settings.chatFontSize || 'base'] || fontSizeClasses.base;
+
   return (
     <motion.div
       key={message.id}
@@ -261,7 +270,7 @@ const MessageItem: React.FC<{
       onTouchEnd={onTouchEnd}
       onClick={() => onClick(message.id)}
       className={cn(
-        "flex w-full gap-3 transition-all duration-300 rounded-xl p-1 relative",
+        "flex w-full gap-2.5 sm:gap-3 transition-all duration-300 rounded-xl px-1 py-0.5 relative",
         message.role === 'user' ? "flex-row-reverse" : "flex-row",
         isSelectionMode && "cursor-pointer active:scale-[0.98]",
         isSelected && "opacity-100 scale-[1.02]",
@@ -280,14 +289,14 @@ const MessageItem: React.FC<{
       )}
 
       {message.role === 'assistant' && (
-        <Avatar className="w-8 h-8 border border-border shrink-0 mt-1">
+        <Avatar className="w-8 h-8 border border-border shrink-0 mt-0.5">
           {settings.aiAvatar && <AvatarImage src={settings.aiAvatar} />}
           <AvatarFallback><Bot size={16} /></AvatarFallback>
         </Avatar>
       )}
 
       {message.role === 'user' && (
-        <Avatar className="w-8 h-8 border border-border shrink-0 mt-1">
+        <Avatar className="w-8 h-8 border border-border shrink-0 mt-0.5">
           {settings.userAvatar && <AvatarImage src={settings.userAvatar} />}
           <AvatarFallback><User size={16} /></AvatarFallback>
         </Avatar>
@@ -298,13 +307,14 @@ const MessageItem: React.FC<{
         message.role === 'user' ? "items-end" : "items-start",
         isSelectionMode && !isSelected && "opacity-50"
       )}>
-        <div className="flex items-center gap-2 mb-1 px-1">
+        <div className="flex items-center gap-2 mb-0.5 px-1">
           <span className="text-[10px] font-medium text-muted-foreground tracking-wider select-none">
             {message.role === 'assistant' ? settings.aiName : settings.userName}
           </span>
         </div>
         <div className={cn(
-          "px-3.5 py-3 sm:px-5 sm:py-4 rounded-[18px] sm:rounded-[20px] text-[14px] sm:text-[15px] leading-relaxed transition-all relative overflow-hidden select-text break-words",
+          "px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-[16px] sm:rounded-[18px] transition-all relative overflow-hidden select-text break-words",
+          activeFontSizeClass,
           message.role === 'user' 
             ? "bg-white dark:bg-card border border-border text-black dark:text-foreground" 
             : "bg-white dark:bg-card border border-border text-black dark:text-foreground",
@@ -701,7 +711,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   return (
     <div 
       ref={scrollRef} 
-        className="flex-1 overflow-y-auto px-2.5 py-3 sm:p-4 space-y-4 sm:space-y-6 pb-20 sm:pb-24 overscroll-contain"
+        className="flex-1 overflow-y-auto px-2.5 py-2.5 sm:px-4 sm:py-3 space-y-2 sm:space-y-2.5 pb-20 sm:pb-24 overscroll-contain"
         onTouchMove={handleTouchMove}
       >
         {messages.map((message) => (

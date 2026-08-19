@@ -9,25 +9,176 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { estimateTokens } from "../lib/utils";
 import { API_BASE_URL } from "../config";
 
-// Helper to sanitize API endpoint
-function sanitizeEndpoint(endpoint: string): string {
-  let sanitized = endpoint.trim();
-  if (!sanitized.startsWith('http://') && !sanitized.startsWith('https://')) {
-    sanitized = `https://${sanitized}`;
+// Helper to normalize and sanitize custom OpenAI-compatible API endpoints
+export function normalizeApiBaseUrl(rawEndpoint: string): string {
+  if (!rawEndpoint) return '';
+  let endpoint = rawEndpoint.trim();
+  
+  // 1. 补全协议头
+  if (!endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
+    if (
+      endpoint.startsWith('localhost') || 
+      endpoint.startsWith('127.0.0.1') || 
+      endpoint.startsWith('192.168.') || 
+      endpoint.startsWith('10.')
+    ) {
+      endpoint = `http://${endpoint}`;
+    } else {
+      endpoint = `https://${endpoint}`;
+    }
   }
-  // Ensure it ends with /v1 for LM Studio compatibility
-  if (!sanitized.endsWith('/v1') && !sanitized.endsWith('/v1/')) {
-    sanitized = `${sanitized.replace(/\/$/, '')}/v1`;
+
+  // 2. 清除末尾多余斜杠
+  endpoint = endpoint.replace(/\/+$/, '');
+
+  // 3. 智能去除用户可能手动粘贴的各类动作后缀（防止重复拼接）
+  endpoint = endpoint
+    .replace(/\/chat\/completions\/?$/i, '')
+    .replace(/\/completions\/?$/i, '')
+    .replace(/\/models\/?$/i, '')
+    .replace(/\/responses\/?$/i, '')
+    .replace(/\/embeddings\/?$/i, '')
+    .replace(/\/+$/, '');
+
+  // 4. 国内及国际主流特殊厂商智能路由规则
+  // (1) 阿里通义千问 / 阿里云百炼 (DashScope)
+  if (endpoint.includes('dashscope.aliyuncs.com')) {
+    if (!endpoint.includes('/compatible-mode/v1')) {
+      endpoint = endpoint.replace(/\/+$/, '');
+      if (endpoint.endsWith('/v1')) {
+        endpoint = endpoint.replace(/\/v1$/, '/compatible-mode/v1');
+      } else {
+        endpoint = `${endpoint}/compatible-mode/v1`;
+      }
+    }
+    return endpoint;
   }
-  return sanitized;
+
+  // (2) 智谱 AI / 清言 (ZhipuAI GLM)
+  if (endpoint.includes('open.bigmodel.cn')) {
+    if (!endpoint.includes('/api/paas/v4')) {
+      endpoint = endpoint.replace(/\/+$/, '');
+      if (endpoint.endsWith('/v1') || endpoint.endsWith('/v4')) {
+        endpoint = endpoint.replace(/\/(v1|v4)$/, '/api/paas/v4');
+      } else {
+        endpoint = `${endpoint}/api/paas/v4`;
+      }
+    }
+    return endpoint;
+  }
+
+  // (3) 火山引擎 / 豆包 / 火山方舟 (Volces / Ark)
+  if (endpoint.includes('volces.com') || endpoint.includes('volcengine.com')) {
+    if (!endpoint.includes('/api/v3') && !endpoint.includes('/api/')) {
+      endpoint = `${endpoint}/api/v3`;
+    }
+    return endpoint;
+  }
+
+  // (4) 百度文心千帆平台 (Baidu Qianfan)
+  if (endpoint.includes('qianfan.baidubce.com')) {
+    if (!endpoint.includes('/v2') && !endpoint.includes('/v1')) {
+      endpoint = `${endpoint}/v2`;
+    }
+    return endpoint;
+  }
+
+  // 5. 判断是否已经包含版本号路径（例如 /v1, /v2, /v3, /v4, /api/v1 等）
+  const hasVersionPath = /\/(v\d+|api\/v\d+|compatible-mode\/v\d+|api\/paas\/v\d+)$/i.test(endpoint) || /\/v\d+\//i.test(endpoint) || /\/api\//i.test(endpoint);
+
+  // 如果是纯域名且未包含任何版本路径，默认自动补齐标准 /v1
+  if (!hasVersionPath) {
+    endpoint = `${endpoint}/v1`;
+  }
+
+  return endpoint;
+}
+
+export function getChatCompletionsUrl(endpoint: string): string {
+  const base = normalizeApiBaseUrl(endpoint);
+  return `${base}/chat/completions`;
+}
+
+export function getModelsUrl(endpoint: string): string {
+  const base = normalizeApiBaseUrl(endpoint);
+  return `${base}/models`;
+}
+
+/**
+ * 智能规范化 FunASR HTTP 转写接口地址
+ * 1. 自动去除首尾空格与多余末尾斜杠
+ * 2. 自动修正/补齐协议 (http:// 或 https://，如果是 ws:// 自动转换为 http://)
+ * 3. 本地/局域网 IP 默认使用 http://，外部域名使用 https://
+ */
+export function normalizeHttpAsrUrl(rawEndpoint: string): string {
+  if (!rawEndpoint) return '';
+  let endpoint = rawEndpoint.trim();
+
+  // 修正误填的 ws 协议
+  if (endpoint.startsWith('ws://')) {
+    endpoint = endpoint.replace('ws://', 'http://');
+  } else if (endpoint.startsWith('wss://')) {
+    endpoint = endpoint.replace('wss://', 'https://');
+  } else if (!endpoint.startsWith('http://') && !endpoint.startsWith('https://')) {
+    if (
+      endpoint.startsWith('localhost') || 
+      endpoint.startsWith('127.0.0.1') || 
+      endpoint.startsWith('192.168.') || 
+      endpoint.startsWith('10.') || 
+      endpoint.startsWith('172.') ||
+      /^(\d{1,3}\.){3}\d{1,3}/.test(endpoint)
+    ) {
+      endpoint = `http://${endpoint}`;
+    } else {
+      endpoint = `https://${endpoint}`;
+    }
+  }
+
+  // 清除末尾多余斜杠
+  endpoint = endpoint.replace(/\/+$/, '');
+  return endpoint;
+}
+
+/**
+ * 智能规范化 FunASR 实时流式 WebSocket 接口地址
+ * 1. 自动去除首尾空格与多余末尾斜杠
+ * 2. 自动修正/补齐 ws 协议 (如果是 http:// 自动转换为 ws://，https:// 转换为 wss://)
+ * 3. 本地/局域网 IP 默认使用 ws://，其他外网域名默认使用 wss://
+ */
+export function normalizeWsAsrUrl(rawEndpoint: string): string {
+  if (!rawEndpoint) return '';
+  let endpoint = rawEndpoint.trim();
+
+  // 修正误填的 http 协议
+  if (endpoint.startsWith('http://')) {
+    endpoint = endpoint.replace('http://', 'ws://');
+  } else if (endpoint.startsWith('https://')) {
+    endpoint = endpoint.replace('https://', 'wss://');
+  } else if (!endpoint.startsWith('ws://') && !endpoint.startsWith('wss://')) {
+    if (
+      endpoint.startsWith('localhost') || 
+      endpoint.startsWith('127.0.0.1') || 
+      endpoint.startsWith('192.168.') || 
+      endpoint.startsWith('10.') || 
+      endpoint.startsWith('172.') ||
+      /^(\d{1,3}\.){3}\d{1,3}/.test(endpoint)
+    ) {
+      endpoint = `ws://${endpoint}`;
+    } else {
+      endpoint = `wss://${endpoint}`;
+    }
+  }
+
+  // 清除末尾多余斜杠
+  endpoint = endpoint.replace(/\/+$/, '');
+  return endpoint;
 }
 
 export async function fetchModels(settings: AppSettings): Promise<string[]> {
   if (!settings.apiEndpoint) return [];
   
   try {
-    const sanitizedEndpoint = sanitizeEndpoint(settings.apiEndpoint);
-    const url = `${sanitizedEndpoint.replace(/\/v1$/, '')}/v1/models`;
+    const url = getModelsUrl(settings.apiEndpoint);
     
     const options = {
       url: url,
@@ -40,7 +191,7 @@ export async function fetchModels(settings: AppSettings): Promise<string[]> {
     };
     
     const response = await CapacitorHttp.request(options);
-    if (response.status === 200 && Array.isArray(response.data.data)) {
+    if (response.status === 200 && Array.isArray(response.data?.data)) {
       return response.data.data.map((m: any) => m.id);
     }
   } catch (err) {
@@ -56,9 +207,8 @@ export async function sendMessageToGemini(
 ) {
   try {
     if (settings.apiEndpoint) {
-      const sanitizedEndpoint = sanitizeEndpoint(settings.apiEndpoint);
       // Use CapacitorHttp for better compatibility and to bypass CORS on mobile
-      const url = `${sanitizedEndpoint}/chat/completions`;
+      const url = getChatCompletionsUrl(settings.apiEndpoint);
       console.log("Attempting to connect to API endpoint:", url);
       
       const systemMessage = settings.systemInstruction 
@@ -156,7 +306,10 @@ export async function sendMessageToGemini(
         throw new Error(`API 请求失败: ${response.status} ${response.data?.error?.message || ''}`);
       }
 
-      const fullText = response.data.choices[0]?.message?.content || "";
+      const fullText = response.data?.choices?.[0]?.message?.content 
+        || response.data?.choices?.[0]?.message?.reasoning_content 
+        || response.data?.choices?.[0]?.text 
+        || "";
       
       if (fullText) {
         onChunk?.(fullText);
@@ -271,7 +424,29 @@ export async function sendMessageToGemini(
   }
 }
 
-export async function transcribeAudio(mediaUrl: string, endpoint: string): Promise<string> {
+export interface TranscribeOptions {
+  apiKey?: string;
+  model?: string;
+}
+
+export async function transcribeAudio(
+  mediaUrl: string, 
+  endpointOrSettings: string | AppSettings,
+  options?: TranscribeOptions
+): Promise<string> {
+  let endpoint = "";
+  let apiKey = options?.apiKey || "";
+  let model = options?.model || "";
+
+  if (typeof endpointOrSettings === 'object' && endpointOrSettings !== null) {
+    endpoint = endpointOrSettings.funasrHttpEndpoint || "";
+    apiKey = apiKey || endpointOrSettings.asrApiKey || endpointOrSettings.apiKey || "";
+    model = model || endpointOrSettings.asrModel || "";
+  } else if (typeof endpointOrSettings === 'string') {
+    endpoint = endpointOrSettings;
+  }
+
+  const normalizedEndpoint = normalizeHttpAsrUrl(endpoint);
   let blob: Blob;
   
   if (mediaUrl.startsWith('data:')) {
@@ -297,20 +472,31 @@ export async function transcribeAudio(mediaUrl: string, endpoint: string): Promi
     formData.append('file', blob, 'audio.wav');
     
     const baseUrl = Capacitor.isNativePlatform() ? API_BASE_URL : '';
-    const proxyUrl = `${baseUrl}/api/funasr-transcribe?endpoint=${encodeURIComponent(endpoint)}`;
+    let proxyUrl = `${baseUrl}/api/funasr-transcribe?endpoint=${encodeURIComponent(normalizedEndpoint)}`;
+    if (model) {
+      proxyUrl += `&model=${encodeURIComponent(model)}`;
+    }
+    
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers['x-asr-api-key'] = apiKey;
+    }
+
     const response = await fetch(proxyUrl, {
       method: 'POST',
+      headers,
       body: formData,
     });
     
     if (!response.ok) {
-      throw new Error(`HTTP 错误 ${response.status}`);
+      const errJson = await response.json().catch(() => ({}));
+      throw new Error(errJson.error || `HTTP 错误 ${response.status}`);
     }
     const data = await response.json();
-    const text = data.text || data.result || (Array.isArray(data.data) ? data.data[0] : null) || (data.data && data.data.text) || JSON.stringify(data);
-    return text;
+    const text = data.text || data.transcription || data.result || (Array.isArray(data.data) ? data.data[0] : null) || (data.data && data.data.text) || (typeof data === 'string' ? data : JSON.stringify(data));
+    return typeof text === 'string' ? text.trim() : JSON.stringify(text);
   } catch (err) {
-    console.error("FunASR HTTP Transcribe connection error:", err);
+    console.error("ASR Transcribe connection error:", err);
     throw err;
   }
 }
