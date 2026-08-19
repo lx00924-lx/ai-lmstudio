@@ -250,6 +250,7 @@ async function runServerSideGeneration({
       // OpenAI compatible flow
       const url = getChatCompletionsUrl(apiEndpoint);
       console.log(`[Server Background Gen] Calling OpenAI compatible API: ${url} (model: ${modelName || 'default'})`);
+      console.log(`[Server Background Gen] Request Body:`, JSON.stringify(requestBody).substring(0, 200));
       
       const systemMessage = systemInstruction 
         ? [{ role: 'system', content: systemInstruction }] 

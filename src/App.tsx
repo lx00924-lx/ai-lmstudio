@@ -862,8 +862,11 @@ export default function App() {
           })
         });
         if (!res.ok) {
+          const errorText = await res.text().catch(() => "");
+          console.error(`[Client Chat] Server-side dispatch failed (Status ${res.status}): ${errorText}`);
           throw new Error(`Server returned ${res.status}`);
         }
+        console.log(`[Client Chat] Server-side dispatch successful.`);
       }
     } catch (serverErr) {
       console.warn("[Client Chat] Server-side dispatch failed, falling back to direct client-side generation:", serverErr);
