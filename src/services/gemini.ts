@@ -306,10 +306,7 @@ export async function sendMessageToGemini(
         throw new Error(`API 请求失败: ${response.status} ${response.data?.error?.message || ''}`);
       }
 
-      const fullText = response.data?.choices?.[0]?.message?.content 
-        || response.data?.choices?.[0]?.message?.reasoning_content 
-        || response.data?.choices?.[0]?.text 
-        || "";
+      const fullText = response.data.choices[0]?.message?.content || "";
       
       if (fullText) {
         onChunk?.(fullText);

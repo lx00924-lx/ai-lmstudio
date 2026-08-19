@@ -4,7 +4,6 @@ import { Server } from "socket.io";
 import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
 import path from "path";
 import fs from "fs/promises";
-import { createWriteStream } from "fs";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
@@ -32,44 +31,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
   }
 }
 
-// Atomic file write using temporary file with Windows EPERM retry and fallback
+// Atomic file write using a temporary file and rename
 async function safeWriteJSON(filePath: string, data: any): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true }).catch(() => {});
-
-  const tempPath = `${filePath}.tmp.${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const tempPath = `${filePath}.tmp.${Math.random().toString(36).substring(2, 9)}`;
   const content = JSON.stringify(data, null, 2);
-
-  try {
-    await fs.writeFile(tempPath, content, "utf-8");
-
-    // Attempt rename with retries for Windows NTFS file locking
-    let renamed = false;
-    for (let i = 0; i < 5; i++) {
-      try {
-        await fs.rename(tempPath, filePath);
-        renamed = true;
-        break;
-      } catch (err: any) {
-        if (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES') {
-          await new Promise(r => setTimeout(r, 40 * (i + 1)));
-        } else {
-          throw err;
-        }
-      }
-    }
-
-    if (!renamed) {
-      // Fallback directly to write target file if rename is continuously locked on Windows
-      await fs.writeFile(filePath, content, "utf-8");
-      await fs.unlink(tempPath).catch(() => {});
-    }
-  } catch (err) {
-    // Clean up temporary file
-    await fs.unlink(tempPath).catch(() => {});
-    // Direct write fallback as last resort
-    await fs.writeFile(filePath, content, "utf-8");
-  }
+  await fs.writeFile(tempPath, content, "utf-8");
+  await fs.rename(tempPath, filePath);
 }
 
 // Robust JSON reader with auto-recovery for corrupted JSON files
@@ -249,7 +216,7 @@ async function runServerSideGeneration({
   };
   activeGenerations.set(genKey, genState);
 
-  // Initial placeholder save in DB (guarded against file lock interruptions)
+  // Initial placeholder save in DB
   const initialAssistantMessage = {
     id: assistantMessageId,
     role: 'assistant',
@@ -258,11 +225,7 @@ async function runServerSideGeneration({
     type: 'text',
     status: 'generating',
   };
-  try {
-    await upsertMessage(userId, initialAssistantMessage);
-  } catch (initialErr) {
-    console.warn(`[Server Background Gen] Initial placeholder save skipped due to file lock:`, initialErr);
-  }
+  await upsertMessage(userId, initialAssistantMessage);
 
   try {
     const apiEndpoint = settings?.apiEndpoint?.trim();
@@ -376,11 +339,7 @@ async function runServerSideGeneration({
             if (dataStr === "[DONE]") continue;
             try {
               const json = JSON.parse(dataStr);
-              const delta = json.choices?.[0]?.delta?.content 
-                || json.choices?.[0]?.delta?.reasoning_content 
-                || json.choices?.[0]?.delta?.text 
-                || json.choices?.[0]?.text 
-                || "";
+              const delta = json.choices?.[0]?.delta?.content || json.choices?.[0]?.text || "";
               if (delta) {
                 onChunk(delta);
               }
@@ -389,10 +348,7 @@ async function runServerSideGeneration({
         }
       } else {
         const json: any = await resp.json();
-        const full = json.choices?.[0]?.message?.content 
-          || json.choices?.[0]?.message?.reasoning_content 
-          || json.choices?.[0]?.text 
-          || "";
+        const full = json.choices?.[0]?.message?.content || "";
         if (full) onChunk(full);
       }
 
@@ -721,28 +677,15 @@ async function startServer() {
       if (files.length === parseInt(totalChunks)) {
         // Assemble
         const finalPath = path.join(UPLOADS_DIR, filename);
-        const writeStream = createWriteStream(finalPath);
-        
-        await new Promise<void>((resolve, reject) => {
-          writeStream.on('finish', resolve);
-          writeStream.on('error', reject);
-          (async () => {
-            try {
-              for (let i = 0; i < files.length; i++) {
-                const chunkPath = path.join(chunkDir, i.toString());
-                const chunkData = await fs.readFile(chunkPath);
-                writeStream.write(chunkData);
-                await fs.unlink(chunkPath).catch(() => {});
-              }
-              writeStream.end();
-            } catch (err) {
-              writeStream.destroy();
-              reject(err);
-            }
-          })();
-        });
-
-        await fs.rmdir(chunkDir).catch(() => {});
+        const writeStream = require('fs').createWriteStream(finalPath);
+        for (let i = 0; i < files.length; i++) {
+          const chunkPath = path.join(chunkDir, i.toString());
+          const chunkData = await fs.readFile(chunkPath);
+          writeStream.write(chunkData);
+          await fs.unlink(chunkPath);
+        }
+        writeStream.end();
+        await fs.rmdir(chunkDir);
         res.json({ url: `/uploads/${filename}`, completed: true });
       } else {
         res.json({ completed: false });
