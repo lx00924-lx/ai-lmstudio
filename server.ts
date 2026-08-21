@@ -448,6 +448,8 @@ async function runServerSideGeneration({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AetherX/1.0",
           "Authorization": `Bearer ${apiKey || "lm-studio"}`,
         },
         body: JSON.stringify(requestBody),
