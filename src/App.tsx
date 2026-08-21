@@ -820,6 +820,7 @@ export default function App() {
   const queueRef = useRef<Message[]>([]);
 
   const runGeminiQuery = useCallback(async (allMessagesSoFar: Message[]) => {
+    console.log("[Client Chat] runGeminiQuery triggered. Socket connected:", socket.connected);
     const assistantMessageId = crypto.randomUUID();
     const assistantMessage: Message = {
       id: assistantMessageId,

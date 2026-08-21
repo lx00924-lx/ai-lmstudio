@@ -1,4 +1,5 @@
 import express from "express";
+import FormData from "form-data";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
@@ -250,7 +251,6 @@ async function runServerSideGeneration({
       // OpenAI compatible flow
       const url = getChatCompletionsUrl(apiEndpoint);
       console.log(`[Server Background Gen] Calling OpenAI compatible API: ${url} (model: ${modelName || 'default'})`);
-      console.log(`[Server Background Gen] Request Body:`, JSON.stringify(requestBody).substring(0, 200));
       
       const systemMessage = systemInstruction 
         ? [{ role: 'system', content: systemInstruction }] 
@@ -305,6 +305,8 @@ async function runServerSideGeneration({
         ],
         stream: true,
       };
+
+      console.log(`[Server Background Gen] Request Body:`, JSON.stringify(requestBody).substring(0, 200));
 
       const resp = await fetch(url, {
         method: "POST",
@@ -703,13 +705,14 @@ async function startServer() {
   });
 
   // Universal Proxy route for Voice Transcription (FunASR & OpenAI/Whisper compatible APIs)
-  app.post("/api/funasr-transcribe", upload.single("file"), async (req, res) => {
+  app.post("/api/funasr-transcribe", upload.any(), async (req, res) => {
     try {
+      const file = (req.files as any)?.[0] || req.file;
       const rawEndpoint = (req.query.endpoint as string) || "";
       if (!rawEndpoint) {
         return res.status(400).json({ error: "Missing endpoint parameter" });
       }
-      if (!req.file) {
+      if (!file) {
         return res.status(400).json({ error: "No file uploaded" });
       }
 
@@ -751,8 +754,10 @@ async function startServer() {
         sanitized.endsWith('/v1/') ||
         !!model;
 
-      // Auto-append /audio/transcriptions if user provided a base URL for an OpenAI compatible provider
-      if (isOpenAiCompatible && !sanitized.includes('/audio/transcriptions')) {
+      // Auto-append /audio/transcriptions if user provided a base URL for an OpenAI compatible provider, 
+      // but only if it's not already there.
+      const alreadyHasPath = sanitized.includes('/audio/transcriptions');
+      if (isOpenAiCompatible && !alreadyHasPath) {
         sanitized = sanitized.replace(/\/+$/, '');
         if (sanitized.includes('dashscope.aliyuncs.com')) {
           if (!sanitized.includes('/compatible-mode/v1')) {
@@ -775,20 +780,18 @@ async function startServer() {
         }
       }
 
-      const fileBuffer = await fs.readFile(req.file.path);
-      const fileName = req.file.originalname || "audio.wav";
-      const mimeType = req.file.mimetype || "audio/wav";
-      const blob = new Blob([fileBuffer], { type: mimeType });
+      const fileBuffer = await fs.readFile(file.path);
+      const fileName = file.originalname || "audio.wav";
+      const mimeType = file.mimetype || "audio/wav";
 
-      const formData = new FormData();
       const headers: Record<string, string> = {};
-
       if (apiKey) {
         headers["Authorization"] = `Bearer ${apiKey}`;
       }
+      
+      var response: Response;
 
       if (isOpenAiCompatible) {
-        // Default models for known providers if not explicitly set
         if (!model) {
           if (sanitized.includes('siliconflow')) {
             model = 'FunAudioLLM/SenseVoiceSmall';
@@ -800,28 +803,55 @@ async function startServer() {
             model = 'whisper-1';
           }
         }
-        formData.append("file", blob, fileName);
-        formData.append("model", model);
-        formData.append("response_format", "json");
-      } else {
-        // FunASR C++ and Python standard payload
-        formData.append("audio_in", blob, fileName);
-        formData.append("file", blob, fileName);
-        formData.append("wav_name", fileName);
-        formData.append("wav_format", "wav");
-        formData.append("is_itn", "1");
-      }
 
-      console.log(`[ASR Proxy] Sending request to: ${sanitized} (model: ${model || 'default'}, auth: ${apiKey ? 'present' : 'none'})`);
-      const response = await fetch(sanitized, {
-        method: "POST",
-        headers,
-        body: formData,
-      });
+        const form = new FormData();
+        form.append('model', model);
+        form.append('file', fileBuffer, {
+          filename: fileName,
+          contentType: mimeType,
+          knownLength: fileBuffer.length
+        });
+
+        const formHeaders = form.getHeaders();
+        const formBuffer = form.getBuffer();
+
+        response = await fetch(sanitized, {
+          method: 'POST',
+          headers: { 
+            ...headers, 
+            ...formHeaders,
+            'Content-Length': formBuffer.length.toString()
+          },
+          body: formBuffer,
+        });
+      } else {
+        // Fallback for non-OpenAI compatible endpoints (FunASR C++ / Python server)
+        const form = new FormData();
+        form.append("audio_in", fileBuffer, { filename: fileName, contentType: mimeType });
+        form.append("file", fileBuffer, { filename: fileName, contentType: mimeType });
+        form.append("wav_name", fileName);
+        form.append("wav_format", "wav");
+        form.append("is_itn", "1");
+        
+        const formHeaders = form.getHeaders();
+        const formBuffer = form.getBuffer();
+
+        response = await fetch(sanitized, {
+          method: "POST",
+          headers: { 
+            ...headers, 
+            ...formHeaders,
+            'Content-Length': formBuffer.length.toString()
+          },
+          body: formBuffer,
+        });
+      }
 
       // Clean up local temp file
       try {
-        await fs.unlink(req.file.path);
+        if (file && file.path) {
+          await fs.unlink(file.path);
+        }
       } catch (err) {
         console.error("Failed to delete temp proxy file:", err);
       }
@@ -843,9 +873,9 @@ async function startServer() {
       }
     } catch (error: any) {
       console.error("[ASR Proxy] Exception:", error);
-      if (req.file && req.file.path) {
+      if (file && file.path) {
         try {
-          await fs.unlink(req.file.path);
+          await fs.unlink(file.path);
         } catch (_) {}
       }
       res.status(500).json({ error: error.message || "Failed to proxy ASR request" });
@@ -1024,8 +1054,9 @@ async function startServer() {
     });
 
     socket.on("start_generation", async ({ userId, assistantMessageId, messages, settings }) => {
+      console.log(`[Socket] Received start_generation for user ${userId}, messageId ${assistantMessageId}`);
       try {
-        console.log(`[Socket] Received start_generation for user ${userId}, messageId ${assistantMessageId}`);
+        console.log(`[Socket] Starting server-side generation for ${assistantMessageId}`);
         runServerSideGeneration({
           userId: userId || "guest",
           assistantMessageId,

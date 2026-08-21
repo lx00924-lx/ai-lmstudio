@@ -466,7 +466,7 @@ export async function transcribeAudio(
 
   try {
     const formData = new FormData();
-    formData.append('file', blob, 'audio.wav');
+    formData.append('audio', blob, 'audio.wav');
     
     const baseUrl = Capacitor.isNativePlatform() ? API_BASE_URL : '';
     let proxyUrl = `${baseUrl}/api/funasr-transcribe?endpoint=${encodeURIComponent(normalizedEndpoint)}`;

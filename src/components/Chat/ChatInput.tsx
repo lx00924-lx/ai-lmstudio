@@ -33,7 +33,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
   const fileInputRef = useRef<HTMLInputElement>(null);
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const isLongPress = useRef(false);
-  const { isRecording, audioUrl, startRecording, stopRecording, setAudioUrl } = useVoiceRecorder();
+  const { isRecording, audioUrl, duration, maxDuration, startRecording, stopRecording, setAudioUrl } = useVoiceRecorder();
   const micLongPressTimer = useRef<NodeJS.Timeout | null>(null);
   const isMicLongPress = useRef(false);
 
@@ -392,28 +392,62 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
         <div className="flex items-center gap-2 sm:gap-3 bg-white dark:bg-black border border-border rounded-[20px] sm:rounded-[24px] p-1.5 sm:p-2 h-14 sm:h-20 shadow-sm dark:shadow-none">
           {/* Main Input Area */}
           <div className="relative flex-1 h-full flex items-center min-w-0">
-            <Input
-              id="chat-text-input"
-              ref={inputRef}
-              value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                if (e.target.value.trim() && isMenuOpen) {
-                  setIsMenuOpen(false);
-                }
-              }}
-              onFocus={() => {
-                if (isMenuOpen) setIsMenuOpen(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder={isRecording ? "正在录音..." : "输入消息..."}
-              className="h-full border-none bg-transparent focus-visible:ring-0 text-sm sm:text-[15px] placeholder:text-muted-foreground pl-3 pr-2"
-            />
+            {isRecording ? (
+              <div className="flex-1 flex items-center justify-between px-3 h-full select-none">
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className={cn(
+                      "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                      duration >= 50 ? "bg-destructive" : "bg-red-500"
+                    )}></span>
+                    <span className={cn(
+                      "relative inline-flex rounded-full h-2.5 w-2.5",
+                      duration >= 50 ? "bg-destructive" : "bg-red-500"
+                    )}></span>
+                  </span>
+                  <span className="text-xs sm:text-sm font-medium text-foreground">
+                    {duration >= 50 ? (
+                      <span className="text-destructive font-semibold animate-pulse">
+                        即将结束 (剩余 {maxDuration - duration}s)
+                      </span>
+                    ) : (
+                      <span>正在录音...</span>
+                    )}
+                  </span>
+                </div>
+                <div className={cn(
+                  "text-xs font-mono px-2 py-0.5 rounded-full border",
+                  duration >= 50 
+                    ? "bg-destructive/10 text-destructive border-destructive/30 font-bold" 
+                    : "bg-muted text-muted-foreground border-border/50"
+                )}>
+                  {duration}s / {maxDuration}s
+                </div>
+              </div>
+            ) : (
+              <Input
+                id="chat-text-input"
+                ref={inputRef}
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  if (e.target.value.trim() && isMenuOpen) {
+                    setIsMenuOpen(false);
+                  }
+                }}
+                onFocus={() => {
+                  if (isMenuOpen) setIsMenuOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder="输入消息..."
+                className="h-full border-none bg-transparent focus-visible:ring-0 text-sm sm:text-[15px] placeholder:text-muted-foreground pl-3 pr-2"
+              />
+            )}
             <Button
               type="button"
               variant="ghost"
