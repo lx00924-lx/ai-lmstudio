@@ -5,6 +5,15 @@
 
 export type MessageRole = 'user' | 'assistant';
 
+export interface AgentExecutionInfo {
+  taskId?: string;
+  status: 'running' | 'completed' | 'failed';
+  steps: string[];
+  rawOutput?: string;
+  timestamp?: string;
+  agentModel?: string;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -14,6 +23,8 @@ export interface Message {
   mediaUrl?: string;
   transcribedText?: string;
   status?: 'generating' | 'completed' | 'error';
+  isAgentMode?: boolean;
+  agentExecution?: AgentExecutionInfo;
   quote?: {
     id: string;
     userName: string;
@@ -50,6 +61,10 @@ export interface AppSettings {
   asrModel?: string;
   showDebugFloatButton?: boolean;
   chatFontSize?: 'sm' | 'base' | 'lg' | 'xl';
+  // Agent mode & local bridge configurations
+  agentMode?: boolean;
+  agentToken?: string;
+  agentHarnessUrl?: string;
 }
 
 export interface ChatState {

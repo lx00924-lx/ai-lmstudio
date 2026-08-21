@@ -173,6 +173,25 @@ interface ActiveGeneration {
 
 const activeGenerations = new Map<string, ActiveGeneration>();
 
+// Agent Hub state for reverse WebSocket connections
+interface ConnectedAgent {
+  ws: WSWebSocket;
+  token: string;
+  clientName: string;
+  connectedAt: number;
+  lastPing: number;
+}
+
+const connectedAgents = new Map<string, ConnectedAgent>();
+const pendingAgentTasks = new Map<string, {
+  resolve: (value: { success: boolean; output: string; steps: string[] }) => void;
+  reject: (reason: any) => void;
+  timeoutId: NodeJS.Timeout;
+  token: string;
+  userId: string;
+  assistantMessageId: string;
+}>();
+
 async function upsertMessage(userId: string, message: any) {
   if (!userId || userId === 'guest') return;
   await withFileLock(MESSAGES_FILE, async () => {
@@ -229,14 +248,11 @@ async function runServerSideGeneration({
   await upsertMessage(userId, initialAssistantMessage);
 
   try {
-    const apiEndpoint = settings?.apiEndpoint?.trim();
-    const apiKey = settings?.apiKey || process.env.GEMINI_API_KEY || "";
-    const modelName = settings?.modelName;
-    const systemInstruction = settings?.systemInstruction;
-    const contextLength = settings?.contextLength || 30000;
+    const isAgentMode = settings?.agentMode === true;
+    const agentToken = settings?.agentToken?.trim() || "default_agent_token";
+    let agentExecutionResult: { status: 'completed' | 'failed'; steps: string[]; rawOutput?: string; timestamp?: string } | null = null;
 
     let accumulatedContent = "";
-
     const onChunk = (chunk: string) => {
       accumulatedContent += chunk;
       genState.content = accumulatedContent;
@@ -246,6 +262,126 @@ async function runServerSideGeneration({
         fullContent: accumulatedContent,
       });
     };
+
+    let workingMessages = [...messages];
+    const lastUserMsg = workingMessages[workingMessages.length - 1] || { role: 'user', content: ' ' };
+    const rawUserPrompt = typeof lastUserMsg.content === 'string' ? lastUserMsg.content : (lastUserMsg.content?.[0]?.text || '');
+
+    if (isAgentMode) {
+      const agent = connectedAgents.get(agentToken);
+      if (!agent || agent.ws.readyState !== WSWebSocket.OPEN) {
+        // Agent is offline
+        const offlineNotice = `> ⚠️ **【本地 Agent 模式提示】**\n> 检测到您已开启 **Agent 模式**，但未检测到本地 DeepSeek Harness 桥接连接。\n>\n> **快速解决**：\n> 1. 打开应用右上角 **设置 ➔ 🤖 本地 Agent**；\n> 2. 复制启动命令并在本地终端运行：\`python deepseek_bridge.py --token=${agentToken}\`；\n> 3. 或在聊天输入框左侧一键切换回 **「💬 普通模式」**。`;
+        
+        onChunk(offlineNotice);
+        genState.status = 'completed';
+        genState.content = offlineNotice;
+        const offlineMsg = {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: offlineNotice,
+          timestamp: new Date().toISOString(),
+          type: 'text',
+          status: 'completed',
+          isAgentMode: true,
+          agentExecution: {
+            status: 'failed',
+            steps: ['尝试连接本地 Agent: 失败 (本地未启动桥接程序)'],
+            rawOutput: 'Agent Offline',
+            timestamp: new Date().toISOString(),
+          }
+        };
+        await upsertMessage(userId, offlineMsg);
+        io.to(`user_${userId}`).emit("chat_completed", {
+          messageId: assistantMessageId,
+          content: offlineNotice,
+          isAgentMode: true,
+          agentExecution: offlineMsg.agentExecution
+        });
+        return;
+      }
+
+      // Agent is online -> dispatch task
+      const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      console.log(`[Agent Hub] Dispatching task ${taskId} to agent for token [${agentToken}]`);
+
+      io.to(`user_${userId}`).emit("agent_task_started", {
+        messageId: assistantMessageId,
+        taskId,
+        initialStep: "已将需求派发至本地 DeepSeek Harness 智能体..."
+      });
+
+      try {
+        const taskPromise = new Promise<{ success: boolean; output: string; steps: string[] }>((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            pendingAgentTasks.delete(taskId);
+            reject(new Error("本地 DeepSeek 智能体执行超时 (180秒)"));
+          }, 180000);
+
+          pendingAgentTasks.set(taskId, {
+            resolve,
+            reject,
+            timeoutId,
+            token: agentToken,
+            userId,
+            assistantMessageId,
+          });
+        });
+
+        const sessionId = workingMessages[0]?.id || `session_${userId}`;
+
+        agent.ws.send(JSON.stringify({
+          type: "run_agent",
+          taskId,
+          sessionId,
+          prompt: rawUserPrompt,
+          messages: workingMessages.slice(-5),
+          harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3080"
+        }));
+
+        const taskResult = await taskPromise;
+        agentExecutionResult = {
+          status: taskResult.success ? 'completed' : 'failed',
+          steps: taskResult.steps && taskResult.steps.length > 0 ? taskResult.steps : ['本地执行完成'],
+          rawOutput: taskResult.output,
+          timestamp: new Date().toISOString()
+        };
+
+        io.to(`user_${userId}`).emit("agent_task_finished", {
+          messageId: assistantMessageId,
+          taskId,
+          result: agentExecutionResult
+        });
+
+        // Construct Stage 2 augmented prompt for the App's target model
+        const augmentedPrompt = `用户提出的需求：\n${rawUserPrompt}\n\n====================\n【本地 DeepSeek Harness 智能体执行产出的真实数据与环境结果】：\n${taskResult.output}\n====================\n\n【任务要求】：\n本地智能体已在用户本地环境执行完毕并返回了上述数据。请你结合用户的原始问题与上述本地执行结果，进行条理清晰、严谨专业的总结与深度回答。`;
+        
+        workingMessages = [
+          ...workingMessages.slice(0, -1),
+          { ...lastUserMsg, content: augmentedPrompt }
+        ];
+
+      } catch (agentErr: any) {
+        console.error("[Agent Execution Failed]:", agentErr);
+        agentExecutionResult = {
+          status: 'failed',
+          steps: [`执行出错: ${agentErr.message || '本地响应超时'}`],
+          rawOutput: String(agentErr),
+          timestamp: new Date().toISOString()
+        };
+        io.to(`user_${userId}`).emit("agent_task_finished", {
+          messageId: assistantMessageId,
+          taskId,
+          result: agentExecutionResult
+        });
+      }
+    }
+
+    const apiEndpoint = settings?.apiEndpoint?.trim();
+    const apiKey = settings?.apiKey || process.env.GEMINI_API_KEY || "";
+    const modelName = settings?.modelName;
+    const systemInstruction = settings?.systemInstruction;
+    const contextLength = settings?.contextLength || 30000;
 
     if (apiEndpoint) {
       // OpenAI compatible flow
@@ -277,7 +413,7 @@ async function runServerSideGeneration({
 
       let currentTokens = 0;
       const recentHistory: any[] = [];
-      const historyMessages = messages.slice(0, -1).reverse();
+      const historyMessages = workingMessages.slice(0, -1).reverse();
       for (const msg of historyMessages) {
         const msgTokens = Math.ceil((msg.content || "").length * 1.5);
         if (currentTokens + msgTokens > contextLength) break;
@@ -290,10 +426,10 @@ async function runServerSideGeneration({
         content: mapMessageToContent(m),
       }));
 
-      const lastMsg = messages[messages.length - 1] || { role: 'user', content: ' ' };
+      const finalLastMsg = workingMessages[workingMessages.length - 1] || { role: 'user', content: ' ' };
       const formattedLast = {
         role: 'user',
-        content: mapMessageToContent(lastMsg),
+        content: mapMessageToContent(finalLastMsg),
       };
 
       const requestBody = {
@@ -396,7 +532,7 @@ async function runServerSideGeneration({
 
       let currentTokens = 0;
       const recentHistory: any[] = [];
-      const historyMessages = messages.slice(0, -1).reverse();
+      const historyMessages = workingMessages.slice(0, -1).reverse();
       for (const msg of historyMessages) {
         const msgTokens = Math.ceil((msg.content || "").length * 1.5);
         if (currentTokens + msgTokens > contextLength) break;
@@ -409,8 +545,8 @@ async function runServerSideGeneration({
         parts: mapToGeminiParts(m),
       }));
 
-      const lastMsg = messages[messages.length - 1] || { role: 'user', content: ' ' };
-      const lastParts = mapToGeminiParts(lastMsg);
+      const finalLastMsg = workingMessages[workingMessages.length - 1] || { role: 'user', content: ' ' };
+      const lastParts = mapToGeminiParts(finalLastMsg);
 
       const responseStream = await ai.models.generateContentStream({
         model: targetModel,
@@ -440,12 +576,16 @@ async function runServerSideGeneration({
       timestamp: new Date().toISOString(),
       type: 'text',
       status: 'completed',
+      isAgentMode: isAgentMode || false,
+      ...(agentExecutionResult ? { agentExecution: agentExecutionResult } : {})
     };
     await upsertMessage(userId, finalAssistantMessage);
 
     io.to(`user_${userId}`).emit("chat_completed", {
       messageId: assistantMessageId,
       content: accumulatedContent,
+      isAgentMode: isAgentMode || false,
+      agentExecution: agentExecutionResult
     });
     console.log(`[Server Background Gen] Completed for msg ${assistantMessageId} (${accumulatedContent.length} chars)`);
 
@@ -706,8 +846,9 @@ async function startServer() {
 
   // Universal Proxy route for Voice Transcription (FunASR & OpenAI/Whisper compatible APIs)
   app.post("/api/funasr-transcribe", upload.any(), async (req, res) => {
+    let file: any = null;
     try {
-      const file = (req.files as any)?.[0] || req.file;
+      file = (req.files as any)?.[0] || req.file;
       const rawEndpoint = (req.query.endpoint as string) || "";
       if (!rawEndpoint) {
         return res.status(400).json({ error: "Missing endpoint parameter" });
@@ -882,8 +1023,165 @@ async function startServer() {
     }
   });
 
+  // Agent Status & Bridge Script Download APIs
+  app.get("/api/agent/status", (req, res) => {
+    const token = ((req.query.token as string) || "").trim() || "default_agent_token";
+    const agent = connectedAgents.get(token);
+    if (agent && agent.ws.readyState === WSWebSocket.OPEN) {
+      res.json({ online: true, clientName: agent.clientName, connectedAt: agent.connectedAt });
+    } else {
+      res.json({ online: false });
+    }
+  });
+
+  app.get("/api/agent/download-bridge", async (req, res) => {
+    try {
+      const scriptPath = path.join(process.cwd(), "deepseek_bridge.py");
+      let scriptContent = "";
+      try {
+        scriptContent = await fs.readFile(scriptPath, "utf-8");
+      } catch {
+        scriptContent = `# DeepSeek Bridge Script`;
+      }
+      res.setHeader("Content-Type", "text/x-python; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="deepseek_bridge.py"');
+      res.send(scriptContent);
+    } catch (err: any) {
+      console.error("Failed to serve bridge script:", err);
+      res.status(500).json({ error: "Failed to download bridge script" });
+    }
+  });
+
+  app.post("/api/agent/cancel-task", (req, res) => {
+    try {
+      const { taskId, token } = req.body;
+      if (!taskId) {
+        return res.status(400).json({ error: "Missing taskId" });
+      }
+      
+      const pending = pendingAgentTasks.get(taskId);
+      if (pending) {
+        clearTimeout(pending.timeoutId);
+        pendingAgentTasks.delete(taskId);
+
+        // Notify local bridge to cancel execution
+        const targetToken = token || pending.token;
+        const agent = connectedAgents.get(targetToken);
+        if (agent && agent.ws && agent.ws.readyState === 1) {
+          try {
+            agent.ws.send(JSON.stringify({ type: "cancel_task", taskId }));
+          } catch {}
+        }
+
+        pending.resolve({
+          success: false,
+          output: "任务已由用户手动中止。",
+          steps: ["⏹ 任务已被用户手动中止"]
+        });
+
+        io.to(`user_${pending.userId}`).emit("agent_task_finished", {
+          messageId: pending.assistantMessageId,
+          taskId,
+          result: {
+            status: "cancelled",
+            steps: ["⏹ 任务已被用户手动中止"],
+            rawOutput: "任务已由用户手动中止",
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+
+      res.json({ success: true, message: "Task cancelled successfully" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to cancel task" });
+    }
+  });
+
+  app.post("/api/agent/revoke-token", (req, res) => {
+    try {
+      const { oldToken } = req.body;
+      if (oldToken && connectedAgents.has(oldToken)) {
+        const agent = connectedAgents.get(oldToken);
+        if (agent) {
+          try {
+            agent.ws.send(JSON.stringify({ type: "token_revoked", reason: "Token revoked by user in App settings" }));
+            agent.ws.close(1000, "Token Revoked");
+          } catch {}
+          connectedAgents.delete(oldToken);
+          io.emit("agent_status_change", { token: oldToken, online: false });
+        }
+      }
+      res.json({ success: true, message: "Old token revoked successfully" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to revoke token" });
+    }
+  });
+
+  app.get("/api/agent/download-bat", (req, res) => {
+    try {
+      const token = (req.query.token as string)?.trim() || "default_agent_token";
+      const serverUrl = (req.query.server as string)?.trim() || `${req.protocol}://${req.get("host")}`;
+      const batContent = `@echo off
+chcp 65001 >nul
+set PYTHONIOENCODING=utf-8
+title DeepSeek Harness 本地安全桥接 (v3.0 工业版)
+echo ========================================================
+echo   DeepSeek Harness 本地安全反向桥接启动器 (v3.0)
+echo ========================================================
+echo.
+echo [1/3] 正在探测 Python 执行环境...
+
+set PYTHON_CMD=
+py -3 --version >nul 2>&1 && set PYTHON_CMD=py -3
+if not defined PYTHON_CMD (
+    python --version >nul 2>&1 && set PYTHON_CMD=python
+)
+if not defined PYTHON_CMD (
+    python3 --version >nul 2>&1 && set PYTHON_CMD=python3
+)
+
+if not defined PYTHON_CMD (
+    echo.
+    echo ❌ [错误] 未在系统 PATH 中找到 Python！
+    echo 💡 解决方式:
+    echo    1. 请前往 https://www.python.org 下载安装 Python 3.8+;
+    echo    2. 安装时请务必勾选 "Add Python to PATH" (添加至环境变量).
+    echo.
+    pause
+    exit /b 1
+)
+
+echo [✓] 找到可用 Python: %PYTHON_CMD%
+echo.
+echo [2/3] 正在检查并自动安装依赖库 (websockets, requests)...
+%PYTHON_CMD% -m pip install --quiet --upgrade websockets requests
+
+echo.
+echo [3/3] 启动安全长连接调度...
+echo • 配对 Token   : ${token}
+echo • 服务器地址   : ${serverUrl}
+echo • 本地 Harness : http://127.0.0.1:3080/v1
+echo.
+%PYTHON_CMD% deepseek_bridge.py --token "${token}" --server "${serverUrl}" --harness-url "http://127.0.0.1:3080"
+
+if %errorlevel% neq 0 (
+    echo.
+    echo ⚠️ [提示] 桥接程序退出或发生异常。
+    pause
+)
+`;
+      res.setHeader("Content-Type", "application/x-bat; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="start_bridge.bat"');
+      res.send(batContent);
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to generate bat script" });
+    }
+  });
+
   // WebSocket Proxy for Real-time Streaming FunASR
   const wss = new WebSocketServer({ noServer: true });
+  // WebSocket Server for Local DeepSeek Agent Hub
+  const agentWss = new WebSocketServer({ noServer: true });
 
   httpServer.on("upgrade", (request, socket, head) => {
     try {
@@ -892,9 +1190,104 @@ async function startServer() {
         wss.handleUpgrade(request, socket, head, (ws) => {
           wss.emit("connection", ws, request);
         });
+      } else if (requestUrl.pathname === "/ws/agent") {
+        agentWss.handleUpgrade(request, socket, head, (ws) => {
+          agentWss.emit("connection", ws, request);
+        });
       }
     } catch (err) {
       console.error("[WS Upgrade Error]", err);
+    }
+  });
+
+  // Handle Local Agent WebSocket Connections
+  agentWss.on("connection", (clientWs, request) => {
+    try {
+      const requestUrl = new URL(request.url || "", `http://${request.headers.host || "localhost"}`);
+      let token = requestUrl.searchParams.get("token")?.trim() || "default_agent_token";
+      let clientName = requestUrl.searchParams.get("clientName")?.trim() || "DeepSeek-Harness-Local";
+
+      console.log(`\x1b[32m[Agent Hub] Local Agent connected with token [${token}] (${clientName})\x1b[0m`);
+      const agentInfo: ConnectedAgent = {
+        ws: clientWs,
+        token,
+        clientName,
+        connectedAt: Date.now(),
+        lastPing: Date.now(),
+      };
+      connectedAgents.set(token, agentInfo);
+
+      // Notify all connected frontend sockets
+      io.emit("agent_status_change", { token, online: true, clientName });
+
+      clientWs.on("message", (raw) => {
+        try {
+          const msg = JSON.parse(raw.toString());
+          if (msg.type === "register") {
+            const updatedToken = (msg.token || token).trim();
+            agentInfo.token = updatedToken;
+            if (msg.clientInfo?.name) agentInfo.clientName = msg.clientInfo.name;
+            connectedAgents.set(updatedToken, agentInfo);
+            console.log(`[Agent Hub] Agent registered with token [${updatedToken}]`);
+            io.emit("agent_status_change", { token: updatedToken, online: true, clientName: agentInfo.clientName });
+          } else if (msg.type === "agent_step") {
+            console.log(`[Agent Hub] Agent step for task ${msg.taskId}: ${msg.step}`);
+            io.emit("agent_task_step", {
+              taskId: msg.taskId,
+              step: msg.step,
+            });
+          } else if (msg.type === "agent_result") {
+            console.log(`[Agent Hub] Agent task completed: ${msg.taskId} (success: ${msg.success})`);
+            const pending = pendingAgentTasks.get(msg.taskId);
+            if (pending) {
+              clearTimeout(pending.timeoutId);
+              pendingAgentTasks.delete(msg.taskId);
+              pending.resolve({
+                success: msg.success !== false,
+                output: msg.output || "",
+                steps: msg.steps || [],
+              });
+            }
+          } else if (msg.type === "pong" || msg.type === "app_pong") {
+            agentInfo.lastPing = Date.now();
+          }
+        } catch (err) {
+          console.error("[Agent Hub] Error parsing agent message:", err);
+        }
+      });
+
+      clientWs.on("close", () => {
+        console.log(`\x1b[33m[Agent Hub] Local Agent disconnected for token [${token}]\x1b[0m`);
+        if (connectedAgents.get(token)?.ws === clientWs) {
+          connectedAgents.delete(token);
+          io.emit("agent_status_change", { token, online: false });
+        }
+
+        // Fail-fast any pending tasks that were waiting for this disconnected agent
+        for (const [taskId, taskInfo] of pendingAgentTasks.entries()) {
+          if (taskInfo.token === token) {
+            clearTimeout(taskInfo.timeoutId);
+            pendingAgentTasks.delete(taskId);
+            taskInfo.reject(new Error("本地 DeepSeek Agent 桥接连接已中断，任务已中止。"));
+            io.to(`user_${taskInfo.userId}`).emit("agent_task_finished", {
+              messageId: taskInfo.assistantMessageId,
+              taskId,
+              result: {
+                status: "failed",
+                steps: ["⚠️ 本地 Agent 桥接已断开连接"],
+                rawOutput: "Agent Disconnected",
+                timestamp: new Date().toISOString()
+              }
+            });
+          }
+        }
+      });
+
+      clientWs.on("error", (err) => {
+        console.error("[Agent Hub] Agent WS error:", err);
+      });
+    } catch (err) {
+      console.error("[Agent Hub] Setup error:", err);
     }
   });
 
@@ -1139,6 +1532,18 @@ async function startServer() {
       } catch (error) {
         console.error("Socket error saving settings:", error);
       }
+    });
+
+    socket.on("check_agent_status", ({ token }) => {
+      const cleanToken = (token || "").trim() || "default_agent_token";
+      const agent = connectedAgents.get(cleanToken);
+      const isOnline = !!(agent && agent.ws.readyState === WSWebSocket.OPEN);
+      socket.emit("agent_status_response", {
+        token: cleanToken,
+        online: isOnline,
+        clientName: agent?.clientName,
+        connectedAt: agent?.connectedAt,
+      });
     });
 
     socket.on("disconnect", () => {

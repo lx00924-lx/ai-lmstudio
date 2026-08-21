@@ -11,7 +11,8 @@ import { Message, AppSettings } from '../../types';
 import { cn, formatMessageDate } from '../../lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { motion, AnimatePresence } from 'motion/react';
-import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2 } from 'lucide-react';
+import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2, ChevronDown, Square } from 'lucide-react';
+import { API_BASE_URL } from '../../config';
 import { Clipboard } from '@capacitor/clipboard';
 import { Toast } from '@capacitor/toast';
 
@@ -362,6 +363,78 @@ const MessageItem: React.FC<{
                 </div>
               )}
             </>
+          )}
+
+          {/* Agent Mode Execution Details */}
+          {message.role === 'assistant' && (message.isAgentMode || message.agentExecution) && (
+            <div className="mb-2.5 w-full">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-primary mb-1 select-none">
+                <Bot size={13} className={cn(message.agentExecution?.status === 'running' && "animate-pulse")} />
+                <span>DeepSeek Harness 本地智能体协同</span>
+                {message.agentExecution?.status === 'running' && (
+                  <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded-full font-normal flex items-center gap-1 animate-pulse">
+                    执行中
+                  </span>
+                )}
+                {message.agentExecution?.status === 'completed' && (
+                  <span className="text-[10px] text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded-full font-normal">已完成</span>
+                )}
+                {message.agentExecution?.status === 'failed' && (
+                  <span className="text-[10px] text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-full font-normal">异常提示</span>
+                )}
+
+                {message.agentExecution?.status === 'running' && message.agentExecution.taskId && (
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      try {
+                        await fetch(`${API_BASE_URL}/api/agent/cancel-task`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ taskId: message.agentExecution!.taskId, token: settings.agentToken })
+                        });
+                      } catch (err) {
+                        console.error('Failed to cancel task:', err);
+                      }
+                    }}
+                    className="ml-auto text-[10px] text-destructive hover:bg-destructive/10 border border-destructive/30 px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors"
+                    title="中止当前本地智能体执行"
+                  >
+                    <Square size={8} className="fill-destructive" />
+                    中止任务
+                  </button>
+                )}
+              </div>
+              {message.agentExecution?.steps && message.agentExecution.steps.length > 0 && (
+                <details className="group/agent border border-primary/25 bg-primary/5 rounded-xl text-xs overflow-hidden my-1 shadow-sm">
+                  <summary className="px-2.5 py-1.5 flex items-center justify-between cursor-pointer select-none text-[11px] font-medium text-foreground/90 hover:bg-primary/10 transition-colors">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                      本地智能体执行链路 ({message.agentExecution.steps.length} 步操作)
+                    </span>
+                    <ChevronDown size={12} className="transition-transform group-open/agent:rotate-180 text-muted-foreground" />
+                  </summary>
+                  <div className="p-2.5 pt-1.5 space-y-1 border-t border-primary/15 text-[11px] font-mono text-muted-foreground bg-background/60">
+                    {message.agentExecution.steps.map((st, i) => (
+                      <div key={i} className="flex items-start gap-1.5">
+                        <span className="text-primary select-none shrink-0 font-bold">›</span>
+                        <span className="break-all text-foreground/80">{st}</span>
+                      </div>
+                    ))}
+                    {message.agentExecution.rawOutput && (
+                      <div className="mt-2 pt-2 border-t border-border/50 text-[10px]">
+                        <div className="text-muted-foreground font-semibold mb-1">本地 Harness 产出摘要:</div>
+                        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap bg-muted/50 p-2 rounded-lg text-foreground/90 font-mono select-text border border-border/40">
+                          {message.agentExecution.rawOutput.slice(0, 600)}
+                          {message.agentExecution.rawOutput.length > 600 ? '...' : ''}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </details>
+              )}
+            </div>
           )}
 
               {message.content && (

@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus, Phone } from 'lucide-react';
+import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus, Phone, Bot, Sparkles, AlertCircle } from 'lucide-react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatMessageDate } from '../../lib/utils';
@@ -21,9 +21,22 @@ interface ChatInputProps {
   quotedMessage?: any;
   onCancelQuote?: () => void;
   onStartCall?: () => void;
+  isAgentMode?: boolean;
+  onToggleAgentMode?: () => void;
+  agentOnline?: boolean;
+  onOpenAgentSettings?: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessage, onCancelQuote, onStartCall }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ 
+  onSendMessage, 
+  quotedMessage, 
+  onCancelQuote, 
+  onStartCall,
+  isAgentMode = false,
+  onToggleAgentMode,
+  agentOnline = false,
+  onOpenAgentSettings
+}) => {
   const [text, setText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null); // For local cache
@@ -390,6 +403,50 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
         </AnimatePresence>
 
         <div className="flex items-center gap-2 sm:gap-3 bg-white dark:bg-black border border-border rounded-[20px] sm:rounded-[24px] p-1.5 sm:p-2 h-14 sm:h-20 shadow-sm dark:shadow-none">
+          {/* Agent Mode Toggle Pill */}
+          <button
+            type="button"
+            onClick={onToggleAgentMode}
+            title={
+              isAgentMode 
+                ? (agentOnline ? "当前处于 Agent 模式（本地 Harness 已连接），点击切换为普通模式" : "当前处于 Agent 模式（本地未连接），点击切换为普通模式") 
+                : "当前处于普通模式，点击切换为 DeepSeek Agent 模式"
+            }
+            className={cn(
+              "flex items-center gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-full text-xs font-medium transition-all shrink-0 select-none cursor-pointer active:scale-95",
+              isAgentMode
+                ? "bg-primary/15 text-primary border border-primary/30 shadow-[0_0_12px_rgba(0,210,255,0.15)]"
+                : "bg-muted/60 text-muted-foreground hover:text-foreground border border-border/50 hover:bg-muted"
+            )}
+          >
+            {isAgentMode ? (
+              <>
+                <Bot size={14} className="text-primary animate-pulse shrink-0" />
+                <span className="font-semibold text-[11px] sm:text-xs">Agent</span>
+                <span
+                  onClick={(e) => {
+                    if (!agentOnline && onOpenAgentSettings) {
+                      e.stopPropagation();
+                      onOpenAgentSettings();
+                    }
+                  }}
+                  title={agentOnline ? "本地 DeepSeek Harness 在线" : "本地 Agent 未连接，点击查看配置"}
+                  className={cn(
+                    "inline-block w-2 h-2 rounded-full shrink-0 transition-colors",
+                    agentOnline 
+                      ? "bg-emerald-500 shadow-[0_0_6px_#10b981]" 
+                      : "bg-amber-500/90 animate-pulse hover:scale-125"
+                  )}
+                />
+              </>
+            ) : (
+              <>
+                <Sparkles size={13} className="text-muted-foreground shrink-0" />
+                <span className="text-[11px] sm:text-xs">普通</span>
+              </>
+            )}
+          </button>
+
           {/* Main Input Area */}
           <div className="relative flex-1 h-full flex items-center min-w-0">
             {isRecording ? (
@@ -444,8 +501,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, quotedMessa
                     handleSend();
                   }
                 }}
-                placeholder="输入消息..."
-                className="h-full border-none bg-transparent focus-visible:ring-0 text-sm sm:text-[15px] placeholder:text-muted-foreground pl-3 pr-2"
+                placeholder={isAgentMode ? "发送需求，由本地 DeepSeek Agent 处理..." : "输入消息..."}
+                className="h-full border-none bg-transparent focus-visible:ring-0 text-sm sm:text-[15px] placeholder:text-muted-foreground pl-2 pr-2"
               />
             )}
             <Button

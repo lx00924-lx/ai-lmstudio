@@ -98,6 +98,7 @@ export default function App() {
   const [isCallOpen, setIsCallOpen] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [agentOnline, setAgentOnline] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
   const [isImageFilter, setIsImageFilter] = useState(false);
@@ -379,6 +380,99 @@ export default function App() {
       socket.off("settings_updated");
     };
   }, [user]);
+
+  // DeepSeek Harness Agent Status & Execution Live Tracker
+  useEffect(() => {
+    const token = (state.settings.agentToken || 'default_agent_token').trim();
+    
+    // Initial fetch
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/agent/status?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        setAgentOnline(!!data.online);
+      } catch (_) {
+        setAgentOnline(false);
+      }
+    };
+    checkStatus();
+
+    const handleAgentStatusChange = (data: { token: string; online: boolean }) => {
+      if (data.token === token) {
+        setAgentOnline(data.online);
+      }
+    };
+
+    const handleAgentTaskStarted = (data: { taskId: string; messageId: string; prompt: string }) => {
+      setState(prev => ({
+        ...prev,
+        messages: prev.messages.map(msg => 
+          msg.id === data.messageId
+            ? {
+                ...msg,
+                isAgentMode: true,
+                agentExecution: {
+                  taskId: data.taskId,
+                  status: 'running',
+                  steps: ['正在派发任务至本地 DeepSeek Agent...']
+                }
+              }
+            : msg
+        )
+      }));
+    };
+
+    const handleAgentTaskStep = (data: { taskId: string; messageId: string; step: string }) => {
+      setState(prev => ({
+        ...prev,
+        messages: prev.messages.map(msg => 
+          msg.id === data.messageId
+            ? {
+                ...msg,
+                agentExecution: {
+                  ...(msg.agentExecution || { taskId: data.taskId, status: 'running', steps: [] }),
+                  steps: [...(msg.agentExecution?.steps || []), data.step]
+                }
+              }
+            : msg
+        )
+      }));
+    };
+
+    const handleAgentTaskFinished = (data: { taskId: string; messageId: string; success: boolean; result?: string; error?: string }) => {
+      setState(prev => ({
+        ...prev,
+        messages: prev.messages.map(msg => 
+          msg.id === data.messageId
+            ? {
+                ...msg,
+                agentExecution: {
+                  ...(msg.agentExecution || { taskId: data.taskId, steps: [] }),
+                  status: data.success ? 'completed' : 'failed',
+                  rawOutput: data.result || data.error,
+                  steps: [
+                    ...(msg.agentExecution?.steps || []),
+                    data.success ? '本地 Agent 执行完毕，正在由模型总结思考回答...' : `Agent 执行失败: ${data.error || '未知错误'}`
+                  ]
+                }
+              }
+            : msg
+        )
+      }));
+    };
+
+    socket.on("agent_status_change", handleAgentStatusChange);
+    socket.on("agent_task_started", handleAgentTaskStarted);
+    socket.on("agent_task_step", handleAgentTaskStep);
+    socket.on("agent_task_finished", handleAgentTaskFinished);
+
+    return () => {
+      socket.off("agent_status_change", handleAgentStatusChange);
+      socket.off("agent_task_started", handleAgentTaskStarted);
+      socket.off("agent_task_step", handleAgentTaskStep);
+      socket.off("agent_task_finished", handleAgentTaskFinished);
+    };
+  }, [state.settings.agentToken]);
 
   const [quotedMessage, setQuotedMessage] = useState<Message | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(initialTheme);
@@ -822,13 +916,20 @@ export default function App() {
   const runGeminiQuery = useCallback(async (allMessagesSoFar: Message[]) => {
     console.log("[Client Chat] runGeminiQuery triggered. Socket connected:", socket.connected);
     const assistantMessageId = crypto.randomUUID();
+    const isAgent = !!state.settings.agentMode;
     const assistantMessage: Message = {
       id: assistantMessageId,
       role: 'assistant',
       content: "",
       timestamp: new Date(),
       type: 'text',
-      status: 'generating'
+      status: 'generating',
+      isAgentMode: isAgent,
+      agentExecution: isAgent ? {
+        taskId: '',
+        status: 'running',
+        steps: ['正在派发任务至本地 DeepSeek Agent...']
+      } : undefined
     };
 
     // 1. Add Assistant placeholder locally
@@ -953,6 +1054,7 @@ export default function App() {
       type,
       mediaUrl,
       transcribedText,
+      isAgentMode: !!state.settings.agentMode,
       quote: quotedMessage ? {
         id: quotedMessage.id,
         userName: quotedMessage.role === 'assistant' ? state.settings.aiName : state.settings.userName,
@@ -1612,6 +1714,17 @@ function compareSemVer(v1: string, v2: string): number {
                     quotedMessage={quotedMessage}
                     onCancelQuote={() => setQuotedMessage(null)}
                     onStartCall={() => setIsCallOpen(true)}
+                    isAgentMode={state.settings.agentMode || false}
+                    agentOnline={agentOnline}
+                    onToggleAgentMode={() => {
+                      const newMode = !state.settings.agentMode;
+                      handleSaveSettings({
+                        ...state.settings,
+                        agentMode: newMode
+                      });
+                      Toast.show({ text: newMode ? '已切换至 DeepSeek Agent 模式' : '已切换至普通对话模式' });
+                    }}
+                    onOpenAgentSettings={() => setIsSettingsOpen(true)}
                   />
                 </motion.div>
               )}
