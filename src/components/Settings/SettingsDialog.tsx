@@ -107,10 +107,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 
 # 强制标准输出为 UTF-8 编码，防止 Windows 终端乱码
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -908,7 +910,11 @@ if %errorlevel% neq 0 (
       const blob = new Blob([buffer], { type: 'audio/wav' });
       const formData = new FormData();
       formData.append('file', blob, 'test.wav');
+      formData.append('audio', blob, 'test.wav');
       formData.append('audio_in', blob, 'test.wav');
+      if (localSettings.asrModel) {
+        formData.append('model', localSettings.asrModel);
+      }
 
       const baseUrl = (window as any).Capacitor?.isNativePlatform?.() ? API_BASE_URL : '';
       let proxyUrl = `${baseUrl}/api/funasr-transcribe?endpoint=${encodeURIComponent(targetUrl)}`;
@@ -920,6 +926,7 @@ if %errorlevel% neq 0 (
       const testApiKey = localSettings.asrApiKey || localSettings.apiKey;
       if (testApiKey) {
         headers['x-asr-api-key'] = testApiKey;
+        headers['Authorization'] = `Bearer ${testApiKey}`;
       }
 
       const controller = new AbortController();

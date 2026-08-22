@@ -468,7 +468,12 @@ export async function transcribeAudio(
 
   try {
     const formData = new FormData();
+    formData.append('file', blob, 'audio.wav');
     formData.append('audio', blob, 'audio.wav');
+    formData.append('audio_in', blob, 'audio.wav');
+    if (model) {
+      formData.append('model', model);
+    }
     
     const baseUrl = Capacitor.isNativePlatform() ? API_BASE_URL : '';
     let proxyUrl = `${baseUrl}/api/funasr-transcribe?endpoint=${encodeURIComponent(normalizedEndpoint)}`;
@@ -479,6 +484,7 @@ export async function transcribeAudio(
     const headers: Record<string, string> = {};
     if (apiKey) {
       headers['x-asr-api-key'] = apiKey;
+      headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
     const response = await fetch(proxyUrl, {

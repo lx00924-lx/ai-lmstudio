@@ -22,10 +22,12 @@ import hmac
 import json
 import logging
 import os
+import re
 import sys
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 
 # 强制标准输出为 UTF-8 编码，防止 Windows 终端乱码
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):

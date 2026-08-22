@@ -846,14 +846,14 @@ async function startServer() {
     res.json({ url: `/uploads/${req.file.filename}` });
   });
 
-  // Universal Proxy route for Voice Transcription (FunASR & OpenAI/Whisper compatible APIs)
-  app.post("/api/funasr-transcribe", upload.any(), async (req, res) => {
+  // Universal Proxy route for Voice Transcription (FunASR, SenseVoice & OpenAI/Whisper compatible APIs)
+  app.post(["/api/funasr-transcribe", "/api/asr/transcribe", "/api/asr/speech-to-text"], upload.any(), async (req, res) => {
     let file: any = null;
     try {
       file = (req.files as any)?.[0] || req.file;
-      const rawEndpoint = (req.query.endpoint as string) || "";
+      const rawEndpoint = (req.query.endpoint as string) || (req.query.target as string) || (req.body?.endpoint as string) || (req.body?.target as string) || "";
       if (!rawEndpoint) {
-        return res.status(400).json({ error: "Missing endpoint parameter" });
+        return res.status(400).json({ error: "Missing endpoint/target parameter" });
       }
       if (!file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -862,9 +862,10 @@ async function startServer() {
       const apiKey = (req.headers["x-asr-api-key"] as string) || 
                      (req.headers["x-api-key"] as string) || 
                      (req.headers["authorization"]?.replace(/^Bearer\s+/i, "")) || 
-                     (req.query.apiKey as string) || "";
+                     (req.query.apiKey as string) || 
+                     (req.body?.apiKey as string) || "";
 
-      let model = (req.query.model as string) || (req.headers["x-asr-model"] as string) || "";
+      let model = (req.query.model as string) || (req.headers["x-asr-model"] as string) || (req.body?.model as string) || "";
 
       let sanitized = rawEndpoint.trim();
       if (sanitized.startsWith('ws://')) {
