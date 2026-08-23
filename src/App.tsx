@@ -170,9 +170,6 @@ export default function App() {
             if (settings.backgroundOpacity === 20 || settings.backgroundOpacity === undefined || settings.backgroundOpacity === null) {
               settings.backgroundOpacity = 100;
             }
-            if (settings.bgOpacity === 20 || settings.bgOpacity === undefined || settings.bgOpacity === null) {
-              settings.bgOpacity = 100;
-            }
             try {
               if (settingsKey) localStorage.setItem(settingsKey, JSON.stringify(settings));
               localStorage.setItem('gemini_settings', JSON.stringify(settings));

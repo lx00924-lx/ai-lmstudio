@@ -49,6 +49,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   onOpenLogViewer,
 }) => {
   const [localSettings, setLocalSettings] = React.useState<AppSettings>(settings);
+  const localSettingsRef = React.useRef<AppSettings>(settings);
+  localSettingsRef.current = localSettings;
+
   const [updateStatus, setUpdateStatus] = React.useState<{ type: 'error' | 'success', message: string } | null>(null);
   const [isChecking, setIsChecking] = React.useState(false);
   const [isFetchingModels, setIsFetchingModels] = React.useState(false);
@@ -76,6 +79,46 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [copiedFullCode, setCopiedFullCode] = React.useState(false);
   const [isRevokingToken, setIsRevokingToken] = React.useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = React.useState<string>('');
+
+  const normalizeSettings = React.useCallback((raw: AppSettings): AppSettings => {
+    let validOpacity = raw.backgroundOpacity;
+    if (validOpacity == null || isNaN(validOpacity)) {
+      validOpacity = 100;
+    } else {
+      validOpacity = Math.min(100, Math.max(0, Math.round(validOpacity)));
+    }
+
+    return {
+      ...raw,
+      apiEndpoint: raw.apiEndpoint?.trim() || '',
+      funasrHttpEndpoint: raw.funasrHttpEndpoint?.trim() || '',
+      funasrWsEndpoint: raw.funasrWsEndpoint?.trim() || '',
+      asrModel: raw.asrModel?.trim() || '',
+      asrApiKey: raw.asrApiKey?.trim() || '',
+      agentToken: (raw.agentToken || '').trim() || 'default_agent_token',
+      agentHarnessUrl: (raw.agentHarnessUrl || '').trim() || 'http://127.0.0.1:3080',
+      backgroundOpacity: validOpacity
+    };
+  }, []);
+
+  const saveSettingsImmediate = React.useCallback((targetSettings?: AppSettings) => {
+    const target = targetSettings || localSettingsRef.current;
+    const normalized = normalizeSettings(target);
+    onSave(normalized);
+  }, [normalizeSettings, onSave]);
+
+  const updateAndSave = React.useCallback((patch: Partial<AppSettings>) => {
+    setLocalSettings(prev => {
+      const next = { ...prev, ...patch };
+      localSettingsRef.current = next;
+      saveSettingsImmediate(next);
+      return next;
+    });
+  }, [saveSettingsImmediate]);
+
+  const handleBlur = React.useCallback(() => {
+    saveSettingsImmediate();
+  }, [saveSettingsImmediate]);
 
   const currentOrigin = typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null'
     ? window.location.origin
@@ -1125,7 +1168,7 @@ if %errorlevel% neq 0 (
   }, [localSettings.agentToken, currentOrigin, normalizedHarnessUrl]);
 
   const handleRevokeAndResetToken = React.useCallback(async () => {
-    const oldToken = localSettings.agentToken || 'default_agent_token';
+    const oldToken = localSettingsRef.current.agentToken || 'default_agent_token';
     const newToken = `agent_${Math.random().toString(36).substring(2, 8)}_${Math.random().toString(36).substring(2, 6)}`;
     setIsRevokingToken(true);
     try {
@@ -1134,18 +1177,18 @@ if %errorlevel% neq 0 (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ oldToken })
       });
-      setLocalSettings(prev => ({ ...prev, agentToken: newToken }));
-      setAgentOnlineStatus({ online: false });
-      alert("✅ 已成功注销旧 Token 并生成全新凭证！请使用新生成的脚本或命令重新启动本地桥接。");
     } catch (e) {
-      setLocalSettings(prev => ({ ...prev, agentToken: newToken }));
+      // fallback
     } finally {
       setIsRevokingToken(false);
+      updateAndSave({ agentToken: newToken });
+      setAgentOnlineStatus({ online: false });
+      alert("✅ 已成功注销旧 Token 并生成全新凭证！新凭证已自动保存生效。");
     }
-  }, [localSettings.agentToken]);
+  }, [updateAndSave]);
 
   const checkAgentStatus = React.useCallback(async (tokenToTest?: string) => {
-    const token = (tokenToTest || localSettings.agentToken || 'default_agent_token').trim();
+    const token = (tokenToTest || localSettingsRef.current.agentToken || 'default_agent_token').trim();
     setIsCheckingAgent(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/agent/status?token=${encodeURIComponent(token)}`);
@@ -1156,7 +1199,7 @@ if %errorlevel% neq 0 (
     } finally {
       setIsCheckingAgent(false);
     }
-  }, [localSettings.agentToken]);
+  }, []);
 
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.isElectron;
 
@@ -1327,11 +1370,13 @@ if %errorlevel% neq 0 (
     if (foundModels.length > 0) {
       foundModels.sort((a, b) => a.localeCompare(b));
       const defaultModel = foundModels[0];
-      setLocalSettings(prev => ({
-        ...prev,
+      const targetModel = localSettingsRef.current.modelName && foundModels.includes(localSettingsRef.current.modelName)
+        ? localSettingsRef.current.modelName
+        : defaultModel;
+      updateAndSave({
         availableModels: foundModels,
-        modelName: prev.modelName && foundModels.includes(prev.modelName) ? prev.modelName : defaultModel,
-      }));
+        modelName: targetModel,
+      });
       setModelFetchStatus({ type: 'success', message: `发现 ${foundModels.length} 个可用模型/接入点` });
     } else {
       if (isVolces) {
@@ -1417,7 +1462,11 @@ if %errorlevel% neq 0 (
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setLocalSettings((prev) => ({ ...prev, [name]: value }));
+    setLocalSettings((prev) => {
+      const next = { ...prev, [name]: value };
+      localSettingsRef.current = next;
+      return next;
+    });
   };
 
   const handleImageSelect = async (field: keyof AppSettings, source: CameraSource) => {
@@ -1441,7 +1490,7 @@ if %errorlevel% neq 0 (
   };
 
   const clearField = (field: keyof AppSettings) => {
-    setLocalSettings(prev => ({ ...prev, [field]: '' }));
+    updateAndSave({ [field]: '' });
   };
 
   const handleTestHttp = async () => {
@@ -1576,7 +1625,7 @@ if %errorlevel% neq 0 (
         }
       };
 
-      ws.onerror = (e) => {
+      ws.onerror = () => {
         if (!isDone) {
           isDone = true;
           clearTimeout(timeoutId);
@@ -1588,29 +1637,6 @@ if %errorlevel% neq 0 (
       setWsTestStatus({ type: 'error', message: e.message || '创建 WebSocket 失败' });
       setIsTestingWs(false);
     }
-  };
-
-  const handleSave = () => {
-    let validOpacity = localSettings.backgroundOpacity;
-    if (validOpacity == null || isNaN(validOpacity)) {
-      validOpacity = 100;
-    } else {
-      validOpacity = Math.min(100, Math.max(0, Math.round(validOpacity)));
-    }
-
-    const updatedSettings = {
-      ...localSettings,
-      apiEndpoint: localSettings.apiEndpoint?.trim() || '',
-      funasrHttpEndpoint: localSettings.funasrHttpEndpoint?.trim() || '',
-      funasrWsEndpoint: localSettings.funasrWsEndpoint?.trim() || '',
-      asrModel: localSettings.asrModel?.trim() || '',
-      asrApiKey: localSettings.asrApiKey?.trim() || '',
-      agentToken: (localSettings.agentToken || '').trim() || 'default_agent_token',
-      agentHarnessUrl: (localSettings.agentHarnessUrl || '').trim() || 'http://127.0.0.1:3080',
-      backgroundOpacity: validOpacity
-    };
-    onSave(updatedSettings);
-    onOpenChange(false);
   };
 
   const FileUploadField = ({ label, field, placeholder }: { label: string, field: keyof AppSettings, placeholder?: string }) => (
@@ -1660,8 +1686,15 @@ if %errorlevel% neq 0 (
     </div>
   );
 
+  const handleDialogOpenChange = (newOpen: boolean) => {
+    if (!newOpen) {
+      saveSettingsImmediate();
+    }
+    onOpenChange(newOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent 
         className="w-[94vw] max-w-[440px] sm:max-w-[480px] bg-white dark:bg-black border-border text-foreground max-h-[85vh] max-h-[85dvh] overflow-y-auto rounded-2xl sm:rounded-3xl p-4 sm:p-6"
       >
@@ -1683,28 +1716,33 @@ if %errorlevel% neq 0 (
 
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="userName" className="text-right text-xs">用户名</Label>
-            <Input id="userName" name="userName" value={localSettings.userName} onChange={handleChange} className="col-span-3 h-8 text-xs" />
+            <Input id="userName" name="userName" value={localSettings.userName} onChange={handleChange} onBlur={handleBlur} className="col-span-3 h-8 text-xs" />
           </div>
           
           <FileUploadField label="用户头像" field="userAvatar" />
 
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="aiName" className="text-right text-xs">AI 名称</Label>
-            <Input id="aiName" name="aiName" value={localSettings.aiName} onChange={handleChange} className="col-span-3 h-8 text-xs" />
+            <Input id="aiName" name="aiName" value={localSettings.aiName} onChange={handleChange} onBlur={handleBlur} className="col-span-3 h-8 text-xs" />
           </div>
 
           <FileUploadField label="AI 头像" field="aiAvatar" />
 
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="apiKey" className="text-right text-xs">API Key</Label>
-            <Input id="apiKey" name="apiKey" type="password" value={localSettings.apiKey} onChange={handleChange} className="col-span-3 h-8 text-xs" />
+            <Input id="apiKey" name="apiKey" type="password" value={localSettings.apiKey} onChange={handleChange} onBlur={handleBlur} className="col-span-3 h-8 text-xs" />
           </div>
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="modelName" className="text-right text-xs">模型名称</Label>
             <div className="col-span-3">
               <ModelSelector 
                  settings={localSettings} 
-                 onUpdateSettings={setLocalSettings} 
+                 onUpdateSettings={(newS) => {
+                   setLocalSettings(newS);
+                   localSettingsRef.current = newS;
+                   saveSettingsImmediate(newS);
+                 }}
+                 onBlur={handleBlur}
                  modelsOverride={localSettings.availableModels}
               />
             </div>
@@ -1717,6 +1755,7 @@ if %errorlevel% neq 0 (
                 name="apiEndpoint" 
                 value={localSettings.apiEndpoint} 
                 onChange={handleChange}
+                onBlur={handleBlur}
                 className="h-8 text-xs flex-1" 
               />
               <span className="text-[10px] text-muted-foreground">
@@ -1769,7 +1808,7 @@ if %errorlevel% neq 0 (
                     <button
                       key={item.value}
                       type="button"
-                      onClick={() => setLocalSettings(prev => ({ ...prev, chatFontSize: item.value as any }))}
+                      onClick={() => updateAndSave({ chatFontSize: item.value as any })}
                       className={cn(
                         "flex flex-col items-center justify-center py-1.5 px-1 rounded-md text-xs font-medium transition-all",
                         isSelected 
@@ -1812,21 +1851,29 @@ if %errorlevel% neq 0 (
                 onChange={(e) => {
                   const val = e.target.value;
                   if (val === '') {
-                    setLocalSettings(prev => ({ ...prev, backgroundOpacity: undefined }));
+                    setLocalSettings(prev => {
+                      const next = { ...prev, backgroundOpacity: undefined };
+                      localSettingsRef.current = next;
+                      return next;
+                    });
                   } else {
                     const num = parseInt(val, 10);
                     if (!isNaN(num)) {
                       const clamped = Math.min(100, Math.max(0, num));
-                      setLocalSettings(prev => ({ ...prev, backgroundOpacity: clamped }));
+                      setLocalSettings(prev => {
+                        const next = { ...prev, backgroundOpacity: clamped };
+                        localSettingsRef.current = next;
+                        return next;
+                      });
                     }
                   }
                 }}
                 onBlur={() => {
                   const val = localSettings.backgroundOpacity;
                   if (val == null || isNaN(val)) {
-                    setLocalSettings(prev => ({ ...prev, backgroundOpacity: 100 }));
+                    updateAndSave({ backgroundOpacity: 100 });
                   } else {
-                    setLocalSettings(prev => ({ ...prev, backgroundOpacity: Math.min(100, Math.max(0, val)) }));
+                    updateAndSave({ backgroundOpacity: Math.min(100, Math.max(0, val)) });
                   }
                 }}
                 className="h-8 text-xs flex-1" 
@@ -1843,7 +1890,7 @@ if %errorlevel% neq 0 (
                 id="showBackgroundInDarkMode"
                 type="checkbox"
                 checked={localSettings.showBackgroundInDarkMode}
-                onChange={(e) => setLocalSettings(prev => ({ ...prev, showBackgroundInDarkMode: e.target.checked }))}
+                onChange={(e) => updateAndSave({ showBackgroundInDarkMode: e.target.checked })}
                 className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
               />
             </div>
@@ -1859,7 +1906,7 @@ if %errorlevel% neq 0 (
                     id="showSplashScreen"
                     type="checkbox"
                     checked={localSettings.showSplashScreen}
-                    onChange={(e) => setLocalSettings(prev => ({ ...prev, showSplashScreen: e.target.checked }))}
+                    onChange={(e) => updateAndSave({ showSplashScreen: e.target.checked })}
                     className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
                   />
                 </div>
@@ -1874,6 +1921,7 @@ if %errorlevel% neq 0 (
                       name="splashText" 
                       value={localSettings.splashText || ''} 
                       onChange={handleChange} 
+                      onBlur={handleBlur}
                       className="col-span-3 h-8 text-xs" 
                       placeholder="例如：Aether-X" 
                     />
@@ -1886,6 +1934,7 @@ if %errorlevel% neq 0 (
                       name="splashSubtitle" 
                       value={localSettings.splashSubtitle || ''} 
                       onChange={handleChange} 
+                      onBlur={handleBlur}
                       className="col-span-3 h-8 text-xs" 
                       placeholder="例如：Loading AI Experience" 
                     />
@@ -1897,11 +1946,20 @@ if %errorlevel% neq 0 (
                       name="splashDuration" 
                       type="number"
                       value={localSettings.splashDuration === 0 ? '' : (localSettings.splashDuration || 1000)} 
-                      onChange={(e) => setLocalSettings(prev => ({ ...prev, splashDuration: e.target.value === '' ? 0 : parseInt(e.target.value) }))} 
+                      onChange={(e) => {
+                        const num = e.target.value === '' ? 0 : parseInt(e.target.value);
+                        setLocalSettings(prev => {
+                          const next = { ...prev, splashDuration: num };
+                          localSettingsRef.current = next;
+                          return next;
+                        });
+                      }} 
                       onBlur={(e) => {
                         const val = parseInt(e.target.value);
                         if (isNaN(val) || val < 1000) {
-                          setLocalSettings(prev => ({ ...prev, splashDuration: 1000 }));
+                          updateAndSave({ splashDuration: 1000 });
+                        } else {
+                          updateAndSave({ splashDuration: val });
                         }
                       }}
                       className="col-span-3 h-8 text-xs" 
@@ -1914,7 +1972,7 @@ if %errorlevel% neq 0 (
 
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="systemInstruction" className="text-right text-xs">回复逻辑</Label>
-            <Input id="systemInstruction" name="systemInstruction" value={localSettings.systemInstruction || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：你是一个专业的程序员" />
+            <Input id="systemInstruction" name="systemInstruction" value={localSettings.systemInstruction || ''} onChange={handleChange} onBlur={handleBlur} className="col-span-3 h-8 text-xs" placeholder="例如：你是一个专业的程序员" />
           </div>
 
           <div className="border-t pt-4 mt-2">
@@ -1932,11 +1990,10 @@ if %errorlevel% neq 0 (
                   size="sm"
                   className="h-7 text-[11px] px-2 py-0"
                   onClick={() => {
-                    setLocalSettings(prev => ({
-                      ...prev,
+                    updateAndSave({
                       funasrHttpEndpoint: 'api.siliconflow.cn',
                       asrModel: 'FunAudioLLM/SenseVoiceSmall',
-                    }));
+                    });
                   }}
                 >
                   ⚡ 硅基流动 SenseVoice
@@ -1947,11 +2004,10 @@ if %errorlevel% neq 0 (
                   size="sm"
                   className="h-7 text-[11px] px-2 py-0"
                   onClick={() => {
-                    setLocalSettings(prev => ({
-                      ...prev,
+                    updateAndSave({
                       funasrHttpEndpoint: 'api.groq.com',
                       asrModel: 'whisper-large-v3-turbo',
-                    }));
+                    });
                   }}
                 >
                   🚀 Groq Whisper
@@ -1962,11 +2018,10 @@ if %errorlevel% neq 0 (
                   size="sm"
                   className="h-7 text-[11px] px-2 py-0"
                   onClick={() => {
-                    setLocalSettings(prev => ({
-                      ...prev,
+                    updateAndSave({
                       funasrHttpEndpoint: 'api.openai.com',
                       asrModel: 'whisper-1',
-                    }));
+                    });
                   }}
                 >
                   🌐 OpenAI Whisper
@@ -1977,11 +2032,10 @@ if %errorlevel% neq 0 (
                   size="sm"
                   className="h-7 text-[11px] px-2 py-0"
                   onClick={() => {
-                    setLocalSettings(prev => ({
-                      ...prev,
+                    updateAndSave({
                       funasrHttpEndpoint: 'dashscope.aliyuncs.com',
                       asrModel: 'sensevoice-v1',
-                    }));
+                    });
                   }}
                 >
                   ☁️ 阿里百炼
@@ -1992,12 +2046,11 @@ if %errorlevel% neq 0 (
                   size="sm"
                   className="h-7 text-[11px] px-2 py-0"
                   onClick={() => {
-                    setLocalSettings(prev => ({
-                      ...prev,
+                    updateAndSave({
                       funasrHttpEndpoint: '192.168.1.100:10095',
                       funasrWsEndpoint: '192.168.1.100:10096',
                       asrModel: '',
-                    }));
+                    });
                   }}
                 >
                   🤖 自建 FunASR
@@ -2014,6 +2067,7 @@ if %errorlevel% neq 0 (
                     name="funasrHttpEndpoint" 
                     value={localSettings.funasrHttpEndpoint || ''} 
                     onChange={handleChange} 
+                    onBlur={handleBlur}
                     className="h-8 text-xs flex-1" 
                   />
                   <Button 
@@ -2050,6 +2104,7 @@ if %errorlevel% neq 0 (
                   name="asrModel" 
                   value={localSettings.asrModel || ''} 
                   onChange={handleChange} 
+                  onBlur={handleBlur}
                   placeholder="例如：whisper-1 / FunAudioLLM/SenseVoiceSmall"
                   className="col-span-3 h-8 text-xs" 
                 />
@@ -2063,6 +2118,7 @@ if %errorlevel% neq 0 (
                   type="password"
                   value={localSettings.asrApiKey || ''} 
                   onChange={handleChange} 
+                  onBlur={handleBlur}
                   placeholder="留空则自动复用上方全局 API Key"
                   className="col-span-3 h-8 text-xs" 
                 />
@@ -2076,6 +2132,7 @@ if %errorlevel% neq 0 (
                     name="funasrWsEndpoint" 
                     value={localSettings.funasrWsEndpoint || ''} 
                     onChange={handleChange} 
+                    onBlur={handleBlur}
                     className="h-8 text-xs flex-1" 
                   />
                   <Button 
@@ -2116,17 +2173,27 @@ if %errorlevel% neq 0 (
               onChange={(e) => {
                 const val = e.target.value;
                 if (val === '') {
-                  setLocalSettings(prev => ({ ...prev, contextLength: undefined }));
+                  setLocalSettings(prev => {
+                    const next = { ...prev, contextLength: undefined };
+                    localSettingsRef.current = next;
+                    return next;
+                  });
                 } else {
                   const num = parseInt(val);
                   if (!isNaN(num)) {
-                    setLocalSettings(prev => ({ ...prev, contextLength: Math.max(1, num) }));
+                    setLocalSettings(prev => {
+                      const next = { ...prev, contextLength: Math.max(1, num) };
+                      localSettingsRef.current = next;
+                      return next;
+                    });
                   }
                 }
               }}
               onBlur={() => {
                 if (localSettings.contextLength == null || localSettings.contextLength <= 0) {
-                  setLocalSettings(prev => ({ ...prev, contextLength: 30000 }));
+                  updateAndSave({ contextLength: 30000 });
+                } else {
+                  updateAndSave({ contextLength: localSettings.contextLength });
                 }
               }}
               className="col-span-3 h-8 text-xs" 
@@ -2177,7 +2244,7 @@ if %errorlevel% neq 0 (
                       id="agentMode"
                       type="checkbox"
                       checked={localSettings.agentMode || false}
-                      onChange={(e) => setLocalSettings(prev => ({ ...prev, agentMode: e.target.checked }))}
+                      onChange={(e) => updateAndSave({ agentMode: e.target.checked })}
                       className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
                     />
                     <span className="text-xs text-muted-foreground">
@@ -2195,6 +2262,7 @@ if %errorlevel% neq 0 (
                     name="agentToken"
                     value={localSettings.agentToken || ''}
                     onChange={handleChange}
+                    onBlur={handleBlur}
                     placeholder="输入或生成唯一的配对 Token"
                     className="h-8 text-xs font-mono flex-1"
                   />
@@ -2257,13 +2325,17 @@ if %errorlevel% neq 0 (
                       value={getHarnessInputDisplayValue(localSettings.agentHarnessUrl)}
                       onChange={(e) => {
                         const raw = e.target.value.trim();
-                        // 移除用户不小心黏贴进来的协议头，由系统在后台自动无缝拼接
                         const cleanHost = raw.replace(/^https?:\/\//i, '');
-                        setLocalSettings(prev => ({
-                          ...prev,
-                          agentHarnessUrl: cleanHost ? `http://${cleanHost}` : 'http://127.0.0.1:3080'
-                        }));
+                        setLocalSettings(prev => {
+                          const next = {
+                            ...prev,
+                            agentHarnessUrl: cleanHost ? `http://${cleanHost}` : 'http://127.0.0.1:3080'
+                          };
+                          localSettingsRef.current = next;
+                          return next;
+                        });
                       }}
+                      onBlur={handleBlur}
                       placeholder="127.0.0.1:3080"
                       className="h-8 text-xs font-mono rounded-l-none border-l-0"
                     />
@@ -2349,11 +2421,11 @@ if %errorlevel% neq 0 (
                     </span>
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                      className="h-6 px-2 text-[10px] text-primary hover:bg-primary/10"
                       onClick={async () => {
-                        const token = (localSettings.agentToken || 'default_agent_token').trim();
+                        const token = localSettings.agentToken || 'default_agent_token';
                         const pairUrl = `${currentOrigin}?agentToken=${encodeURIComponent(token)}`;
                         await navigator.clipboard.writeText(pairUrl);
                         setCopiedPairUrl(true);
@@ -2427,11 +2499,11 @@ if %errorlevel% neq 0 (
             <div className="space-y-3">
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="githubOwner" className="text-right text-xs">用户名</Label>
-                <Input id="githubOwner" name="githubOwner" value={localSettings.githubOwner || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：lx00924" />
+                <Input id="githubOwner" name="githubOwner" value={localSettings.githubOwner || ''} onChange={handleChange} onBlur={handleBlur} className="col-span-3 h-8 text-xs" placeholder="例如：lx00924" />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="githubRepo" className="text-right text-xs">仓库名</Label>
-                <Input id="githubRepo" name="githubRepo" value={localSettings.githubRepo || ''} onChange={handleChange} className="col-span-3 h-8 text-xs" placeholder="例如：aether-x" />
+                <Input id="githubRepo" name="githubRepo" value={localSettings.githubRepo || ''} onChange={handleChange} onBlur={handleBlur} className="col-span-3 h-8 text-xs" placeholder="例如：aether-x" />
               </div>
               
               <AnimatePresence>
@@ -2572,7 +2644,7 @@ if %errorlevel% neq 0 (
                 <input
                   type="checkbox"
                   checked={localSettings.showDebugFloatButton ?? true}
-                  onChange={(e) => setLocalSettings(prev => ({ ...prev, showDebugFloatButton: e.target.checked }))}
+                  onChange={(e) => updateAndSave({ showDebugFloatButton: e.target.checked })}
                   className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
                 />
               </div>
@@ -2603,9 +2675,6 @@ if %errorlevel% neq 0 (
             </div>
           </div>
         </div>
-        <DialogFooter>
-          <Button onClick={handleSave} className="w-full transition-all hover:bg-primary/90 active:scale-95">保存更改</Button>
-        </DialogFooter>
       </DialogContent>
       {cropImage && (
         <ImageCropDialog
@@ -2613,8 +2682,11 @@ if %errorlevel% neq 0 (
           open={!!cropImage}
           onClose={() => setCropImage(null)}
           onCropComplete={(croppedImage) => {
-            setLocalSettings(prev => ({ ...prev, [cropImage.field]: croppedImage }));
+            const field = cropImage.field;
             setCropImage(null);
+            setTimeout(() => {
+              updateAndSave({ [field]: croppedImage });
+            }, 0);
           }}
         />
       )}

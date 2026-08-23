@@ -6,7 +6,17 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-export function ModelSelector({ settings, onUpdateSettings, modelsOverride }: { settings: AppSettings, onUpdateSettings: (s: AppSettings) => void, modelsOverride?: string[] }) {
+export function ModelSelector({ 
+  settings, 
+  onUpdateSettings, 
+  modelsOverride,
+  onBlur,
+}: { 
+  settings: AppSettings, 
+  onUpdateSettings: (s: AppSettings) => void, 
+  modelsOverride?: string[],
+  onBlur?: () => void,
+}) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   
@@ -43,6 +53,7 @@ export function ModelSelector({ settings, onUpdateSettings, modelsOverride }: { 
         <Input
           value={settings.modelName}
           onChange={(e) => onUpdateSettings({ ...settings, modelName: e.target.value })}
+          onBlur={onBlur}
           className="h-8 border-none bg-transparent text-xs w-full focus-visible:ring-0"
           placeholder="选择或输入模型名称"
         />
