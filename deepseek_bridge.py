@@ -33,7 +33,22 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-# 强制标准输出为 UTF-8 编码，防止 Windows CMD 终端乱码
+# 强制标准输出为 UTF-8 编码并激活 Windows 控制台 ANSI 颜色与高对比度字符支持
+if sys.platform == "win32":
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        # STD_OUTPUT_HANDLE = -11
+        hOut = kernel32.GetStdHandle(-11)
+        # 获取当前控制台模式
+        mode = ctypes.c_ulong()
+        kernel32.GetConsoleMode(hOut, ctypes.byref(mode))
+        # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        mode.value |= 0x0004
+        kernel32.SetConsoleMode(hOut, mode)
+    except Exception:
+        pass
+
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -345,28 +360,30 @@ class MiniQR:
         return full_matrix
 
 def print_terminal_qr(text: str):
-    """在控制台终端直接打印清晰的字符二维码 (支持微信/相机直接扫描)"""
+    """在控制台终端直接打印高对比度字符二维码 (完美兼容 Windows CMD、PowerShell、Linux 终端)"""
     try:
         matrix = MiniQR.encode(text)
         h = len(matrix)
         w = len(matrix[0])
-        print("\n\033[97m" + " " * 4 + "[ 📱 手机扫码直连通道 ]" + "\033[0m")
-        # 终端双行合一：使用 Unicode ▀ (上半黑) / ▄ (下半黑) / █ (全黑) / 空格
-        for r in range(0, h, 2):
-            line = "    "
+        print("\n    \033[97m[ 📱 手机扫码直连通道 ]\033[0m")
+        print("    \033[90m请使用手机相机或扫码功能扫描下方二维码快速配对:\033[0m\n")
+        
+        # 使用白底黑块反色渲染，确保任何黑色背景的 CMD/PowerShell 都能被手机摄像头秒识别
+        # 顶部加两行纯白保护边距
+        print("    \033[47m" + "  " * (w + 2) + "\033[0m")
+        for r in range(h):
+            row_str = "  "  # 左白边
             for c in range(w):
-                top = matrix[r][c] == 1
-                bot = (matrix[r + 1][c] == 1) if (r + 1 < h) else False
-                if top and bot:
-                    line += "█"
-                elif top and not bot:
-                    line += "▀"
-                elif not top and bot:
-                    line += "▄"
+                if matrix[r][c] == 1:
+                    row_str += "  "  # 二维码黑块 (在白底背景下用黑色背景或反显)
                 else:
-                    line += " "
-            print(f"\033[97m\033[40m{line}\033[0m")
-        print(f"    \033[96m直连地址:\033[0m {text}\n")
+                    row_str += "██"  # 二维码白块 (用全亮块)
+            row_str += "  "  # 右白边
+            # 采用黑底白字或反色打印
+            print(f"    \033[30m\033[47m{row_str}\033[0m")
+        # 底部加两行纯白保护边距
+        print("    \033[47m" + "  " * (w + 2) + "\033[0m\n")
+        print(f"    \033[96m手机扫码/点击直连链接:\033[0m \033[97m{text}\033[0m\n")
     except Exception as e:
         print(f"\n    \033[96m手机扫码直连地址:\033[0m {text}\n")
 
