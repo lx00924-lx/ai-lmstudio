@@ -107,40 +107,92 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [user, setUser] = useState<{ id: string; username: string } | null>(() => {
-    const saved = localStorage.getItem('app_user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('app_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      console.warn('Failed to parse app_user from localStorage', e);
+      return null;
+    }
   });
 
   const [state, setState] = useState<ChatState>(() => {
-    const savedUser = localStorage.getItem('app_user');
-    const parsedUser = savedUser ? JSON.parse(savedUser) : null;
-    const storageKey = getMessageStorageKey(parsedUser?.id);
-    
-    // 优先读取当前用户的本地离线消息，若无则回退检查 guest_messages
-    let rawMessages = localStorage.getItem(storageKey);
-    if (!rawMessages && parsedUser?.id && parsedUser.id !== 'guest') {
-      rawMessages = localStorage.getItem('guest_messages');
-    }
-    const messages = rawMessages ? JSON.parse(rawMessages).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })) : [];
-    
-    // 加载当前用户或全局设置
-    const settingsKey = getSettingsStorageKey(parsedUser?.id);
-    const savedSettings = localStorage.getItem(settingsKey) || localStorage.getItem('gemini_settings');
-    const settings = savedSettings ? { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) } : DEFAULT_SETTINGS;
+    try {
+      let parsedUser: { id?: string; username?: string } | null = null;
+      try {
+        const savedUser = localStorage.getItem('app_user');
+        parsedUser = savedUser ? JSON.parse(savedUser) : null;
+      } catch (_) {
+        parsedUser = null;
+      }
+      const storageKey = getMessageStorageKey(parsedUser?.id);
+      
+      // 优先读取当前用户的本地离线消息，若无则回退检查 guest_messages
+      let rawMessages: string | null = null;
+      try {
+        rawMessages = localStorage.getItem(storageKey);
+        if (!rawMessages && parsedUser?.id && parsedUser.id !== 'guest') {
+          rawMessages = localStorage.getItem('guest_messages');
+        }
+      } catch (_) {
+        rawMessages = null;
+      }
+      
+      let messages: Message[] = [];
+      if (rawMessages) {
+        try {
+          const parsed = JSON.parse(rawMessages);
+          if (Array.isArray(parsed)) {
+            messages = parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp || Date.now()) }));
+          }
+        } catch (e) {
+          console.warn('Failed to parse initial messages from localStorage', e);
+        }
+      }
+      
+      // 加载当前用户或全局设置
+      const settingsKey = getSettingsStorageKey(parsedUser?.id);
+      let savedSettings: string | null = null;
+      try {
+        savedSettings = localStorage.getItem(settingsKey) || localStorage.getItem('gemini_settings');
+      } catch (_) {
+        savedSettings = null;
+      }
+      
+      let settings = DEFAULT_SETTINGS;
+      if (savedSettings) {
+        try {
+          const parsedSettings = JSON.parse(savedSettings);
+          if (parsedSettings && typeof parsedSettings === 'object') {
+            settings = { ...DEFAULT_SETTINGS, ...parsedSettings };
+          }
+        } catch (e) {
+          console.warn('Failed to parse settings from localStorage', e);
+        }
+      }
 
-    return {
-      messages,
-      isLoading: false,
-      error: null,
-      settings
-    };
+      return {
+        messages,
+        isLoading: false,
+        error: null,
+        settings
+      };
+    } catch (err) {
+      console.error('Error initializing state in App.tsx:', err);
+      return {
+        messages: [],
+        isLoading: false,
+        error: null,
+        settings: DEFAULT_SETTINGS
+      };
+    }
   });
 
   // Handle Login
   const handleLogin = async (userData: { id: string; username: string }) => {
     setUser(userData);
-    localStorage.setItem('app_user', JSON.stringify(userData));
-    socket.emit("join_user_room", userData.id);
+    try { localStorage.setItem('app_user', JSON.stringify(userData)); } catch (_) {}
+    try { socket.emit("join_user_room", userData.id); } catch (_) {}
 
     // 1. 读取当前用户本地已有的记录，若为空则将游客记录迁移过来
     const userKey = getMessageStorageKey(userData.id);
@@ -149,14 +201,19 @@ export default function App() {
 
     if (!userLocalRaw && guestMessages && userData.id !== 'guest') {
       userLocalRaw = guestMessages;
-      localStorage.setItem(userKey, guestMessages);
-      localStorage.removeItem('guest_messages');
+      try {
+        localStorage.setItem(userKey, guestMessages);
+        localStorage.removeItem('guest_messages');
+      } catch (_) {}
     }
 
     if (userLocalRaw) {
       try {
-        const parsed = JSON.parse(userLocalRaw).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }));
-        setState(prev => ({ ...prev, messages: parsed }));
+        const parsed = JSON.parse(userLocalRaw);
+        if (Array.isArray(parsed)) {
+          const messages = parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp || Date.now()) }));
+          setState(prev => ({ ...prev, messages }));
+        }
       } catch (e) {
         console.error('Failed to parse local user messages:', e);
       }
@@ -171,7 +228,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: userData.id, messages: messagesToSync })
         });
-        localStorage.removeItem('guest_messages');
+        try { localStorage.removeItem('guest_messages'); } catch (_) {}
         console.log('Guest messages synced.');
       } catch (err) {
         console.warn('Backend offline, guest messages retained in user local store:', err);
@@ -192,11 +249,27 @@ export default function App() {
 
   const handleLogout = () => {
     setUser(null);
-    localStorage.removeItem('app_user');
+    try { localStorage.removeItem('app_user'); } catch (_) {}
     const guestRaw = localStorage.getItem('guest_messages');
-    const guestMessages = guestRaw ? JSON.parse(guestRaw).map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) })) : [];
+    let guestMessages: Message[] = [];
+    if (guestRaw) {
+      try {
+        const parsed = JSON.parse(guestRaw);
+        if (Array.isArray(parsed)) {
+          guestMessages = parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp || Date.now()) }));
+        }
+      } catch (_) {}
+    }
     const guestSettingsRaw = localStorage.getItem('gemini_settings');
-    const guestSettings = guestSettingsRaw ? { ...DEFAULT_SETTINGS, ...JSON.parse(guestSettingsRaw) } : DEFAULT_SETTINGS;
+    let guestSettings = DEFAULT_SETTINGS;
+    if (guestSettingsRaw) {
+      try {
+        const parsed = JSON.parse(guestSettingsRaw);
+        if (parsed && typeof parsed === 'object') {
+          guestSettings = { ...DEFAULT_SETTINGS, ...parsed };
+        }
+      } catch (_) {}
+    }
     
     setState(prev => ({ ...prev, messages: guestMessages, settings: guestSettings }));
     setIsSidebarOpen(false);
@@ -208,17 +281,17 @@ export default function App() {
 
     const syncWithServer = async () => {
       try {
-        socket.emit("join_user_room", user.id);
+        try { socket.emit("join_user_room", user.id); } catch (_) {}
 
         const [msgRes, settingsRes] = await Promise.allSettled([
           fetch(`${API_BASE_URL}/api/messages/${user.id}`).then(r => r.ok ? r.json() : Promise.reject('Failed to fetch messages')),
           fetch(`${API_BASE_URL}/api/settings/${user.id}`).then(r => r.ok ? r.json() : Promise.reject('Failed to fetch settings'))
         ]);
 
-        if (settingsRes.status === 'fulfilled' && settingsRes.value && Object.keys(settingsRes.value).length > 0) {
+        if (settingsRes.status === 'fulfilled' && settingsRes.value && typeof settingsRes.value === 'object' && !settingsRes.value.error) {
           setState(prev => ({
             ...prev,
-            settings: { ...DEFAULT_SETTINGS, ...prev.settings, ...settingsRes.value }
+            settings: { ...DEFAULT_SETTINGS, ...(prev.settings || {}), ...settingsRes.value }
           }));
         }
 
@@ -226,18 +299,20 @@ export default function App() {
           const serverMessages: any[] = msgRes.value;
           
           setState(prev => {
-            const currentLocal = prev.messages;
+            const currentLocal = Array.isArray(prev.messages) ? prev.messages : [];
             const messageMap = new Map<string, Message>();
             
             // 1. 放入服务端消息
             serverMessages.forEach(m => {
-              messageMap.set(m.id, { ...m, timestamp: new Date(m.timestamp) });
+              if (m && m.id) {
+                messageMap.set(m.id, { ...m, timestamp: new Date(m.timestamp || Date.now()) });
+              }
             });
             
             // 2. 检查本地未同步至服务端的消息（离线期间创建的）
             const unsyncedMessages: Message[] = [];
             currentLocal.forEach(m => {
-              if (!messageMap.has(m.id)) {
+              if (m && m.id && !messageMap.has(m.id)) {
                 unsyncedMessages.push(m);
                 messageMap.set(m.id, m);
               }
@@ -282,28 +357,32 @@ export default function App() {
     socket.on("connect", handleConnect);
 
     socket.on("receive_message", (message: Message) => {
+      if (!message || !message.id) return;
       setState(prev => {
-        if (prev.messages.find(m => m.id === message.id)) return prev;
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        if (msgs.find(m => m.id === message.id)) return prev;
         return {
           ...prev,
-          messages: [...prev.messages, { ...message, timestamp: new Date(message.timestamp) }]
+          messages: [...msgs, { ...message, timestamp: new Date(message.timestamp || Date.now()) }]
         };
       });
     });
 
     socket.on("chat_chunk", (data: { messageId: string; chunk: string; fullContent: string }) => {
+      if (!data || !data.messageId) return;
       setState(prev => {
-        const exists = prev.messages.some(m => m.id === data.messageId);
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        const exists = msgs.some(m => m.id === data.messageId);
         if (!exists) {
           return {
             ...prev,
             isLoading: true,
             messages: [
-              ...prev.messages,
+              ...msgs,
               {
                 id: data.messageId,
                 role: 'assistant',
-                content: data.fullContent,
+                content: data.fullContent || '',
                 timestamp: new Date(),
                 type: 'text',
                 status: 'generating'
@@ -314,9 +393,9 @@ export default function App() {
         return {
           ...prev,
           isLoading: true,
-          messages: prev.messages.map(msg => 
+          messages: msgs.map(msg => 
             msg.id === data.messageId 
-              ? { ...msg, content: data.fullContent, status: 'generating' } 
+              ? { ...msg, content: data.fullContent || '', status: 'generating' } 
               : msg
           )
         };
@@ -324,49 +403,63 @@ export default function App() {
     });
 
     socket.on("chat_completed", (data: { messageId: string; content: string }) => {
-      setState(prev => ({
-        ...prev,
-        isLoading: false,
-        messages: prev.messages.map(msg => 
-          msg.id === data.messageId 
-            ? { ...msg, content: data.content, status: 'completed' } 
-            : msg
-        )
-      }));
+      if (!data || !data.messageId) return;
+      setState(prev => {
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        return {
+          ...prev,
+          isLoading: false,
+          messages: msgs.map(msg => 
+            msg.id === data.messageId 
+              ? { ...msg, content: data.content || '', status: 'completed' } 
+              : msg
+          )
+        };
+      });
     });
 
     socket.on("chat_error", (data: { messageId: string; error: string }) => {
-      setState(prev => ({
-        ...prev,
-        isLoading: false,
-        error: data.error || "生成失败",
-        messages: prev.messages.map(msg => 
-          msg.id === data.messageId 
-            ? { ...msg, status: 'error', content: msg.content || `[生成失败: ${data.error}]` } 
-            : msg
-        )
-      }));
+      if (!data || !data.messageId) return;
+      setState(prev => {
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        return {
+          ...prev,
+          isLoading: false,
+          error: data.error || "生成失败",
+          messages: msgs.map(msg => 
+            msg.id === data.messageId 
+              ? { ...msg, status: 'error', content: msg.content || `[生成失败: ${data.error}]` } 
+              : msg
+          )
+        };
+      });
     });
 
     socket.on("message_deleted", (messageId: string) => {
-      setState(prev => ({
-        ...prev,
-        messages: prev.messages.filter(m => m.id !== messageId)
-      }));
+      if (!messageId) return;
+      setState(prev => {
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        return {
+          ...prev,
+          messages: msgs.filter(m => m.id !== messageId)
+        };
+      });
     });
 
     socket.on("messages_updated", (newMessages: Message[]) => {
+      if (!Array.isArray(newMessages)) return;
       setState(prev => ({
         ...prev,
         messages: newMessages.map((m: any) => ({
           ...m,
-          timestamp: new Date(m.timestamp)
+          timestamp: new Date(m.timestamp || Date.now())
         }))
       }));
     });
 
     socket.on("settings_updated", (newSettings: AppSettings) => {
-      setState(prev => ({ ...prev, settings: newSettings }));
+      if (!newSettings || typeof newSettings !== 'object') return;
+      setState(prev => ({ ...prev, settings: { ...DEFAULT_SETTINGS, ...(prev.settings || {}), ...newSettings } }));
     });
 
     return () => {
@@ -389,8 +482,12 @@ export default function App() {
     const checkStatus = async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/agent/status?token=${encodeURIComponent(token)}`);
-        const data = await res.json();
-        setAgentOnline(!!data.online);
+        if (res.ok) {
+          const data = await res.json();
+          setAgentOnline(!!data.online);
+        } else {
+          setAgentOnline(false);
+        }
       } catch (_) {
         setAgentOnline(false);
       }
@@ -398,67 +495,79 @@ export default function App() {
     checkStatus();
 
     const handleAgentStatusChange = (data: { token: string; online: boolean }) => {
-      if (data.token === token) {
+      if (data && data.token === token) {
         setAgentOnline(data.online);
       }
     };
 
     const handleAgentTaskStarted = (data: { taskId: string; messageId: string; prompt: string }) => {
-      setState(prev => ({
-        ...prev,
-        messages: prev.messages.map(msg => 
-          msg.id === data.messageId
-            ? {
-                ...msg,
-                isAgentMode: true,
-                agentExecution: {
-                  taskId: data.taskId,
-                  status: 'running',
-                  steps: ['正在派发任务至本地 DeepSeek Agent...']
+      if (!data || !data.messageId) return;
+      setState(prev => {
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        return {
+          ...prev,
+          messages: msgs.map(msg => 
+            msg.id === data.messageId
+              ? {
+                  ...msg,
+                  isAgentMode: true,
+                  agentExecution: {
+                    taskId: data.taskId,
+                    status: 'running',
+                    steps: ['正在派发任务至本地 DeepSeek Agent...']
+                  }
                 }
-              }
-            : msg
-        )
-      }));
+              : msg
+          )
+        };
+      });
     };
 
     const handleAgentTaskStep = (data: { taskId: string; messageId: string; step: string }) => {
-      setState(prev => ({
-        ...prev,
-        messages: prev.messages.map(msg => 
-          msg.id === data.messageId
-            ? {
-                ...msg,
-                agentExecution: {
-                  ...(msg.agentExecution || { taskId: data.taskId, status: 'running', steps: [] }),
-                  steps: [...(msg.agentExecution?.steps || []), data.step]
+      if (!data || !data.messageId) return;
+      setState(prev => {
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        return {
+          ...prev,
+          messages: msgs.map(msg => 
+            msg.id === data.messageId
+              ? {
+                  ...msg,
+                  agentExecution: {
+                    ...(msg.agentExecution || { taskId: data.taskId, status: 'running', steps: [] }),
+                    steps: [...(msg.agentExecution?.steps || []), data.step]
+                  }
                 }
-              }
-            : msg
-        )
-      }));
+              : msg
+          )
+        };
+      });
     };
 
     const handleAgentTaskFinished = (data: { taskId: string; messageId: string; success: boolean; result?: string; error?: string }) => {
-      setState(prev => ({
-        ...prev,
-        messages: prev.messages.map(msg => 
-          msg.id === data.messageId
-            ? {
-                ...msg,
-                agentExecution: {
-                  ...(msg.agentExecution || { taskId: data.taskId, steps: [] }),
-                  status: data.success ? 'completed' : 'failed',
-                  rawOutput: data.result || data.error,
-                  steps: [
-                    ...(msg.agentExecution?.steps || []),
-                    data.success ? '本地 Agent 执行完毕，正在由模型总结思考回答...' : `Agent 执行失败: ${data.error || '未知错误'}`
-                  ]
+      if (!data || !data.messageId) return;
+      setState(prev => {
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        return {
+          ...prev,
+          messages: msgs.map(msg => 
+            msg.id === data.messageId
+              ? {
+                  ...msg,
+                  agentExecution: {
+                    ...(msg.agentExecution || { taskId: data.taskId, steps: [] }),
+                    status: data.success ? 'completed' : 'failed',
+                    rawOutput: data.result || data.error,
+                    steps: [
+                      ...(msg.agentExecution?.steps || []),
+                      data.success ? '本地 Agent 执行完毕，正在由模型总结思考回答...' : `Agent 执行失败: ${data.error || '未知错误'}`
+                    ]
+                  }
                 }
-              }
-            : msg
-        )
-      }));
+              : msg
+          )
+        };
+      });
     };
 
     socket.on("agent_status_change", handleAgentStatusChange);
@@ -607,15 +716,16 @@ export default function App() {
 
   // Notification implementation
   useEffect(() => {
-    if ('Notification' in window && Notification.permission !== 'granted') {
-      Notification.requestPermission();
-    }
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().catch(() => {});
+      }
+    } catch (_) {}
   }, []);
-
 
   // 监听 URL 扫码快速配对参数 (?agentToken=xxx 或 ?token=xxx)
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && window.location) {
       try {
         const urlParams = new URLSearchParams(window.location.search);
         const tokenFromUrl = urlParams.get('agentToken') || urlParams.get('token');
@@ -626,11 +736,13 @@ export default function App() {
             safeSaveToLocalStorage('gemini_settings', nextSettings);
             return { ...prev, settings: nextSettings };
           });
-          Toast.show({ text: `🎉 扫码成功！已连接本地电脑 Agent` });
+          try { Toast.show({ text: `🎉 扫码成功！已连接本地电脑 Agent` }); } catch (_) {}
           
           // 清理浏览器地址栏上的查询参数
-          const newUrl = window.location.pathname;
-          window.history.replaceState({}, document.title, newUrl);
+          try {
+            const newUrl = window.location.pathname;
+            window.history.replaceState({}, document.title, newUrl);
+          } catch (_) {}
         }
       } catch (e) {
         console.warn('Failed to parse URL query params:', e);

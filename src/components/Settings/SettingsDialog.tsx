@@ -79,7 +79,10 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   React.useEffect(() => {
     const token = (localSettings.agentToken || 'default_agent_token').trim();
-    const pairUrl = `https://lx00924ai.top?agentToken=${encodeURIComponent(token)}`;
+    const origin = typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null'
+      ? window.location.origin
+      : 'https://lx00924ai.top';
+    const pairUrl = `${origin}?agentToken=${encodeURIComponent(token)}`;
     QRCode.toDataURL(pairUrl, {
       width: 220,
       margin: 1.5,
@@ -96,7 +99,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   const generateBridgeScriptContent = React.useCallback(() => {
     const token = (localSettings.agentToken || 'default_agent_token').trim();
-    const serverUrl = 'https://lx00924ai.top';
+    const serverUrl = typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null'
+      ? window.location.origin
+      : 'https://lx00924ai.top';
     const harnessUrl = (localSettings.agentHarnessUrl || 'http://127.0.0.1:3080').trim();
 
     return `#!/usr/bin/env python3
