@@ -332,20 +332,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 >
                   <Camera size={22} className="sm:size-6" />
                 </Button>
-                <span className="text-[10px] text-muted-foreground font-medium">拍照对话</span>
-              </div>
-              <div className="flex flex-col items-center gap-1.5 shrink-0">
-                <Button 
-                  type="button"
-                  variant="ghost" 
-                  size="icon" 
-                  className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-primary/10 border border-primary/30 text-primary select-none active:scale-95 transition-all hover:bg-primary/20 shadow-sm"
-                  onClick={() => openCamera('scanner')}
-                  disabled={isRecording}
-                >
-                  <QrCode size={22} className="sm:size-6" />
-                </Button>
-                <span className="text-[10px] text-primary font-semibold">扫码连电脑</span>
+                <span className="text-[10px] text-muted-foreground font-medium">拍照</span>
               </div>
               <div className="flex flex-col items-center gap-1.5 shrink-0">
                 <Button 

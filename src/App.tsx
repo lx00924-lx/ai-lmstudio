@@ -165,6 +165,17 @@ export default function App() {
           const parsedSettings = JSON.parse(savedSettings);
           if (parsedSettings && typeof parsedSettings === 'object') {
             settings = { ...DEFAULT_SETTINGS, ...parsedSettings };
+            // 如果旧缓存中透明度为 20% 或未设置，自动迁移修正为 100%
+            if (settings.backgroundOpacity === 20 || settings.backgroundOpacity === undefined || settings.backgroundOpacity === null) {
+              settings.backgroundOpacity = 100;
+            }
+            if (settings.bgOpacity === 20 || settings.bgOpacity === undefined || settings.bgOpacity === null) {
+              settings.bgOpacity = 100;
+            }
+            try {
+              if (settingsKey) localStorage.setItem(settingsKey, JSON.stringify(settings));
+              localStorage.setItem('gemini_settings', JSON.stringify(settings));
+            } catch (_) {}
           }
         } catch (e) {
           console.warn('Failed to parse settings from localStorage', e);
