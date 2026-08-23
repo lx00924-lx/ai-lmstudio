@@ -391,8 +391,14 @@ def print_terminal_qr(text: str):
         print(f"\n    \033[96m手机扫码直连地址:\033[0m {text}\n")
 
 # ======================================================================
-# 工业级高容错 HTTP 通信引擎（支持 Chrome 指纹伪装、TLS 自适应、Clash/代理死锁自愈）
+# 工业级高容错 HTTP 通信引擎（支持 Chrome 指纹伪装、TLS 自适应、Clash/代理死锁自愈、多域名备援容灾）
 # ======================================================================
+FALLBACK_SERVERS = [
+    "https://lx00924ai.top",
+    "https://ais-pre-lswjsr25ivxdaulzx2iy3d-135884546184.asia-northeast1.run.app",
+    "https://ais-dev-lswjsr25ivxdaulzx2iy3d-135884546184.asia-northeast1.run.app"
+]
+
 def create_resilient_ssl_context():
     """创建抗干扰、高兼容性的 SSL 上下文"""
     try:
@@ -407,10 +413,11 @@ def create_resilient_ssl_context():
             return None
 
 class ResilientHttpClient:
-    def __init__(self, force_no_proxy: bool = False, custom_proxy: str = ""):
+    def __init__(self, force_no_proxy: bool = False, custom_proxy: str = "", primary_server: str = ""):
         self.ssl_ctx = create_resilient_ssl_context()
         self.force_no_proxy = force_no_proxy
         self.custom_proxy = (custom_proxy or "").strip()
+        self.primary_server = primary_server.rstrip("/") if primary_server else "https://lx00924ai.top"
         
         # 1. Direct 直连 Opener (100% 绕过系统所有代理与 Clash 残留端口)
         self.direct_opener = urllib.request.build_opener(
@@ -434,6 +441,27 @@ class ResilientHttpClient:
         # 默认优先使用的 opener
         self.active_opener = self.direct_opener if force_no_proxy else self.proxy_opener
         self.has_switched_to_direct = False
+        self.active_server_base = self.primary_server
+
+    def get_candidate_urls(self, target_url: str):
+        """若自定义域名因 DNS 故障无法解析，自动提供 Cloud Run 官方高可用备用线路"""
+        candidates = [target_url]
+        for fb in FALLBACK_SERVERS:
+            if fb not in target_url:
+                parsed_fb = urllib.parse.urlparse(fb)
+                parsed_target = urllib.parse.urlparse(target_url)
+                # 替换 scheme 与 netloc，保留 path 和 query
+                fb_url = urllib.parse.urlunparse((
+                    parsed_fb.scheme,
+                    parsed_fb.netloc,
+                    parsed_target.path,
+                    parsed_target.params,
+                    parsed_target.query,
+                    parsed_target.fragment
+                ))
+                if fb_url not in candidates:
+                    candidates.append(fb_url)
+        return candidates
 
     def request(self, url: str, data: bytes = None, headers: dict = None, method: str = "GET", timeout: int = 30) -> str:
         base_headers = {
@@ -445,37 +473,54 @@ class ResilientHttpClient:
         if headers:
             base_headers.update(headers)
 
-        req = urllib.request.Request(url, data=data, headers=base_headers, method=method)
+        candidate_urls = self.get_candidate_urls(url)
+        last_error = None
 
-        try:
-            with self.active_opener.open(req, timeout=timeout) as response:
-                return response.read().decode("utf-8")
-        except Exception as e:
-            err_str = str(e)
-            is_proxy_or_ssl_error = (
-                "10061" in err_str or
-                "refused" in err_str.lower() or
-                "proxy" in err_str.lower() or
-                "UNEXPECTED_EOF" in err_str or
-                "EOF occurred" in err_str or
-                "timed out" in err_str.lower()
-            )
-            # 如果当前使用的是代理并且出现网络/SSL/10061拒连中断，立即自动熔断切换至 Direct 直连
-            if is_proxy_or_ssl_error and self.active_opener != self.direct_opener:
-                if not self.has_switched_to_direct:
-                    print(f"\033[93m[🛡️ 网络自愈] 检测到系统代理不可用或 SSL 握手受阻，已自动熔断代理并切换至 Direct 直连！\033[0m")
-                    self.has_switched_to_direct = True
-                self.active_opener = self.direct_opener
-                with self.direct_opener.open(req, timeout=timeout) as response:
+        for candidate_url in candidate_urls:
+            req = urllib.request.Request(candidate_url, data=data, headers=base_headers, method=method)
+            try:
+                with self.active_opener.open(req, timeout=timeout) as response:
                     return response.read().decode("utf-8")
-            raise
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                is_proxy_or_ssl_error = (
+                    "10061" in err_str or
+                    "refused" in err_str.lower() or
+                    "proxy" in err_str.lower() or
+                    "UNEXPECTED_EOF" in err_str or
+                    "EOF occurred" in err_str or
+                    "timed out" in err_str.lower()
+                )
+                
+                # 遇到代理中断或 SSL 握手受阻，先尝试切 Direct 直连再试一次当前 candidate_url
+                if is_proxy_or_ssl_error and self.active_opener != self.direct_opener:
+                    if not self.has_switched_to_direct:
+                        print(f"\033[93m[🛡️ 网络自愈] 检测到系统代理不可用或 SSL 握手受阻，已自动熔断代理并切换至 Direct 直连！\033[0m")
+                        self.has_switched_to_direct = True
+                    self.active_opener = self.direct_opener
+                    try:
+                        with self.direct_opener.open(req, timeout=timeout) as response:
+                            return response.read().decode("utf-8")
+                    except Exception as retry_e:
+                        last_error = retry_e
+                        err_str = str(retry_e)
+
+                # 如果遇到 DNS 解析失败 (11001) 或连接超时，自动尝试下一个候选节点
+                is_dns_error = "11001" in err_str or "getaddrinfo failed" in err_str or "nodename nor servname" in err_str
+                if is_dns_error and len(candidate_urls) > 1 and candidate_url != candidate_urls[-1]:
+                    continue
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("所有网络候选节点均不可达")
 
 # 全局 HTTP 客户端单例
 GLOBAL_HTTP_CLIENT = ResilientHttpClient()
 
-def init_global_http_client(force_no_proxy: bool = False, custom_proxy: str = ""):
+def init_global_http_client(force_no_proxy: bool = False, custom_proxy: str = "", primary_server: str = ""):
     global GLOBAL_HTTP_CLIENT
-    GLOBAL_HTTP_CLIENT = ResilientHttpClient(force_no_proxy=force_no_proxy, custom_proxy=custom_proxy)
+    GLOBAL_HTTP_CLIENT = ResilientHttpClient(force_no_proxy=force_no_proxy, custom_proxy=custom_proxy, primary_server=primary_server)
 
 def http_post_json(url: str, data: dict, timeout: int = 15) -> dict:
     """通用同步 HTTP POST JSON 请求（带自动容错与代理自愈）"""
@@ -734,8 +779,8 @@ async def run_bridge_client(args):
     server_base = normalize_server_url(args.server)
     concurrency_limit = max(1, args.concurrency)
 
-    # 初始化工业级网络客户端（自适应代理与死锁直连熔断）
-    init_global_http_client(force_no_proxy=args.no_proxy, custom_proxy=args.proxy)
+    # 初始化工业级网络客户端（自适应代理、死锁直连熔断与多域名备援）
+    init_global_http_client(force_no_proxy=args.no_proxy, custom_proxy=args.proxy, primary_server=server_base)
 
     proxy_mode_desc = "强制 Direct 直连" if args.no_proxy else (f"自定义代理 ({args.proxy})" if args.proxy else "自适应系统/VPN代理 (带自动熔断自愈)")
 
