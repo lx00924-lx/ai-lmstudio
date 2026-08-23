@@ -613,6 +613,31 @@ export default function App() {
   }, []);
 
 
+  // 监听 URL 扫码快速配对参数 (?agentToken=xxx 或 ?token=xxx)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const tokenFromUrl = urlParams.get('agentToken') || urlParams.get('token');
+        if (tokenFromUrl && tokenFromUrl.trim()) {
+          const clean = tokenFromUrl.trim();
+          setState(prev => {
+            const nextSettings = { ...prev.settings, agentToken: clean, agentMode: true };
+            safeSaveToLocalStorage('gemini_settings', nextSettings);
+            return { ...prev, settings: nextSettings };
+          });
+          Toast.show({ text: `🎉 扫码成功！已连接本地电脑 Agent` });
+          
+          // 清理浏览器地址栏上的查询参数
+          const newUrl = window.location.pathname;
+          window.history.replaceState({}, document.title, newUrl);
+        }
+      } catch (e) {
+        console.warn('Failed to parse URL query params:', e);
+      }
+    }
+  }, []);
+
   // 持续将消息写入本地存储，确保离线或重启永不丢失
   useEffect(() => {
     const key = getMessageStorageKey(user?.id);
@@ -1725,6 +1750,17 @@ function compareSemVer(v1: string, v2: string): number {
                       Toast.show({ text: newMode ? '已切换至 DeepSeek Agent 模式' : '已切换至普通对话模式' });
                     }}
                     onOpenAgentSettings={() => setIsSettingsOpen(true)}
+                    onScanToken={(token) => {
+                      const cleanToken = token.trim();
+                      if (cleanToken) {
+                        handleSaveSettings({
+                          ...state.settings,
+                          agentToken: cleanToken,
+                          agentMode: true
+                        });
+                        Toast.show({ text: `🎉 配对成功！已连接本地电脑 Agent` });
+                      }
+                    }}
                   />
                 </motion.div>
               )}

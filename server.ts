@@ -173,13 +173,16 @@ interface ActiveGeneration {
 
 const activeGenerations = new Map<string, ActiveGeneration>();
 
-// Agent Hub state for reverse WebSocket connections
+// Agent Hub state for reverse WebSocket and HTTP Long-Polling connections
 interface ConnectedAgent {
-  ws: WSWebSocket;
+  ws?: WSWebSocket;
   token: string;
   clientName: string;
   connectedAt: number;
   lastPing: number;
+  mode: 'ws' | 'polling';
+  pendingPollResolvers?: Array<(taskMsg: any) => void>;
+  queuedTasks?: any[];
 }
 
 const connectedAgents = new Map<string, ConnectedAgent>();
@@ -269,9 +272,14 @@ async function runServerSideGeneration({
 
     if (isAgentMode) {
       const agent = connectedAgents.get(agentToken);
-      if (!agent || agent.ws.readyState !== WSWebSocket.OPEN) {
+      const isAgentOnline = agent && (
+        (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) ||
+        (Date.now() - agent.lastPing < 45000)
+      );
+
+      if (!isAgentOnline) {
         // Agent is offline
-        const offlineNotice = `> ⚠️ **【本地 Agent 模式提示】**\n> 检测到您已开启 **Agent 模式**，但未检测到本地 DeepSeek Harness 桥接连接。\n>\n> **快速解决**：\n> 1. 打开应用右上角 **设置 ➔ 🤖 本地 Agent**；\n> 2. 复制启动命令并在本地终端运行：\`python deepseek_bridge.py --token=${agentToken}\`；\n> 3. 或在聊天输入框左侧一键切换回 **「💬 普通模式」**。`;
+        const offlineNotice = `> ⚠️ **【本地 Agent 模式提示】**\n> 检测到您已开启 **Agent 模式**，但未检测到本地 DeepSeek Harness 桥接连接。\n>\n> **快速解决**：\n> 1. 打开应用右上角 **设置 ➔ 🤖 本地 Agent**；\n> 2. 复制启动命令并在本地终端运行：\`python deepseek_bridge.py --token "${agentToken}" --server "https://lx00924ai.top" --harness-url "http://127.0.0.1:3080"\`；\n> 3. 或在聊天输入框左侧一键切换回 **「💬 普通模式」**。`;
         
         onChunk(offlineNotice);
         genState.status = 'completed';
@@ -286,7 +294,7 @@ async function runServerSideGeneration({
           isAgentMode: true,
           agentExecution: {
             status: 'failed',
-            steps: ['尝试连接本地 Agent: 失败 (本地未启动桥接程序)'],
+            steps: ['尝试连接本地 Agent: 失败 (本地未启动桥接程序或离线)'],
             rawOutput: 'Agent Offline',
             timestamp: new Date().toISOString(),
           }
@@ -303,7 +311,7 @@ async function runServerSideGeneration({
 
       // Agent is online -> dispatch task
       const taskId = `task_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      console.log(`[Agent Hub] Dispatching task ${taskId} to agent for token [${agentToken}]`);
+      console.log(`[Agent Hub] Dispatching task ${taskId} to agent for token [${agentToken}] (mode: ${agent.mode || 'ws'})`);
 
       io.to(`user_${userId}`).emit("agent_task_started", {
         messageId: assistantMessageId,
@@ -329,15 +337,26 @@ async function runServerSideGeneration({
         });
 
         const sessionId = workingMessages[0]?.id || `session_${userId}`;
-
-        agent.ws.send(JSON.stringify({
+        const taskPayload = {
           type: "run_agent",
           taskId,
           sessionId,
           prompt: rawUserPrompt,
           messages: workingMessages.slice(-5),
-          harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3080"
-        }));
+          harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3080",
+          model: settings?.modelName || "deepseek-chat"
+        };
+
+        // Dispatch via WS if available, otherwise deliver to pending long-polling or task queue
+        if (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) {
+          agent.ws.send(JSON.stringify(taskPayload));
+        } else if (agent.pendingPollResolvers && agent.pendingPollResolvers.length > 0) {
+          const resolver = agent.pendingPollResolvers.shift();
+          if (resolver) resolver(taskPayload);
+        } else {
+          if (!agent.queuedTasks) agent.queuedTasks = [];
+          agent.queuedTasks.push(taskPayload);
+        }
 
         const taskResult = await taskPromise;
         agentExecutionResult = {
@@ -1026,12 +1045,179 @@ async function startServer() {
     }
   });
 
-  // Agent Status & Bridge Script Download APIs
+  // Agent Status & Bridge APIs (Dual-Channel: HTTP Long-Polling + WebSocket)
+  app.post("/api/agent/register", (req, res) => {
+    try {
+      const token = ((req.body?.token as string) || "").trim() || "default_agent_token";
+      const clientInfo = req.body?.clientInfo || {};
+      const clientName = clientInfo.name || "DeepSeek-Harness-Local";
+
+      console.log(`\x1b[32m[Agent Hub] Agent registered via HTTP [${token}] (${clientName}, mode: ${clientInfo.mode || 'polling'})\x1b[0m`);
+
+      let agent = connectedAgents.get(token);
+      if (!agent) {
+        agent = {
+          token,
+          clientName,
+          connectedAt: Date.now(),
+          lastPing: Date.now(),
+          mode: clientInfo.mode || 'polling',
+          pendingPollResolvers: [],
+          queuedTasks: []
+        };
+        connectedAgents.set(token, agent);
+      } else {
+        agent.clientName = clientName;
+        agent.lastPing = Date.now();
+        agent.mode = clientInfo.mode || agent.mode || 'polling';
+      }
+
+      io.emit("agent_status_change", { token, online: true, clientName });
+      res.json({ success: true, token, registeredAt: agent.connectedAt });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to register agent" });
+    }
+  });
+
+  // Long-polling endpoint for local Python bridge agent
+  app.get("/api/agent/poll", (req, res) => {
+    try {
+      const token = ((req.query.token as string) || "").trim() || "default_agent_token";
+      const timeoutSec = Math.min(60, Math.max(5, parseInt((req.query.timeout as string) || "25", 10)));
+
+      let agent = connectedAgents.get(token);
+      if (!agent) {
+        agent = {
+          token,
+          clientName: "DeepSeek-Harness-Local",
+          connectedAt: Date.now(),
+          lastPing: Date.now(),
+          mode: 'polling',
+          pendingPollResolvers: [],
+          queuedTasks: []
+        };
+        connectedAgents.set(token, agent);
+        io.emit("agent_status_change", { token, online: true, clientName: agent.clientName });
+      } else {
+        agent.lastPing = Date.now();
+      }
+
+      // Check if there is already a task waiting in queue
+      if (agent.queuedTasks && agent.queuedTasks.length > 0) {
+        const task = agent.queuedTasks.shift();
+        return res.json(task);
+      }
+
+      // Otherwise, hold connection open for long-polling
+      let isResolved = false;
+      const pollTimer = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          if (agent?.pendingPollResolvers) {
+            const idx = agent.pendingPollResolvers.indexOf(deliverTask);
+            if (idx !== -1) agent.pendingPollResolvers.splice(idx, 1);
+          }
+          res.json({ type: "noop", timestamp: Date.now() });
+        }
+      }, timeoutSec * 1000);
+
+      const deliverTask = (taskPayload: any) => {
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(pollTimer);
+          res.json(taskPayload);
+        }
+      };
+
+      if (!agent.pendingPollResolvers) agent.pendingPollResolvers = [];
+      agent.pendingPollResolvers.push(deliverTask);
+
+      req.on("close", () => {
+        if (!isResolved) {
+          isResolved = true;
+          clearTimeout(pollTimer);
+          if (agent?.pendingPollResolvers) {
+            const idx = agent.pendingPollResolvers.indexOf(deliverTask);
+            if (idx !== -1) agent.pendingPollResolvers.splice(idx, 1);
+          }
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to poll agent tasks" });
+    }
+  });
+
+  // Agent task step update
+  app.post("/api/agent/step", (req, res) => {
+    try {
+      const { taskId, step, token } = req.body;
+      if (token && connectedAgents.has(token)) {
+        connectedAgents.get(token)!.lastPing = Date.now();
+      }
+      if (taskId && step) {
+        io.emit("agent_task_step", { taskId, step });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Agent task result report
+  app.post("/api/agent/result", (req, res) => {
+    try {
+      const { taskId, success, steps, output, token } = req.body;
+      if (token && connectedAgents.has(token)) {
+        connectedAgents.get(token)!.lastPing = Date.now();
+      }
+      const pending = pendingAgentTasks.get(taskId);
+      if (pending) {
+        clearTimeout(pending.timeoutId);
+        pendingAgentTasks.delete(taskId);
+        pending.resolve({
+          success: success !== false,
+          output: output || "",
+          steps: steps || []
+        });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Agent heartbeat ping
+  app.post("/api/agent/heartbeat", (req, res) => {
+    const token = ((req.body?.token as string) || "").trim() || "default_agent_token";
+    let agent = connectedAgents.get(token);
+    if (agent) {
+      agent.lastPing = Date.now();
+    } else {
+      agent = {
+        token,
+        clientName: "DeepSeek-Harness-Local",
+        connectedAt: Date.now(),
+        lastPing: Date.now(),
+        mode: 'polling',
+        pendingPollResolvers: [],
+        queuedTasks: []
+      };
+      connectedAgents.set(token, agent);
+      io.emit("agent_status_change", { token, online: true, clientName: agent.clientName });
+    }
+    res.json({ success: true, timestamp: Date.now() });
+  });
+
   app.get("/api/agent/status", (req, res) => {
     const token = ((req.query.token as string) || "").trim() || "default_agent_token";
     const agent = connectedAgents.get(token);
-    if (agent && agent.ws.readyState === WSWebSocket.OPEN) {
-      res.json({ online: true, clientName: agent.clientName, connectedAt: agent.connectedAt });
+    const isOnline = agent && (
+      (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) ||
+      (Date.now() - agent.lastPing < 45000)
+    );
+
+    if (isOnline) {
+      res.json({ online: true, clientName: agent.clientName, connectedAt: agent.connectedAt, mode: agent.mode });
     } else {
       res.json({ online: false });
     }
@@ -1107,8 +1293,10 @@ async function startServer() {
         const agent = connectedAgents.get(oldToken);
         if (agent) {
           try {
-            agent.ws.send(JSON.stringify({ type: "token_revoked", reason: "Token revoked by user in App settings" }));
-            agent.ws.close(1000, "Token Revoked");
+            if (agent.ws && agent.ws.readyState === 1) {
+              agent.ws.send(JSON.stringify({ type: "token_revoked", reason: "Token revoked by user in App settings" }));
+              agent.ws.close(1000, "Token Revoked");
+            }
           } catch {}
           connectedAgents.delete(oldToken);
           io.emit("agent_status_change", { token: oldToken, online: false });
@@ -1123,13 +1311,14 @@ async function startServer() {
   app.get("/api/agent/download-bat", (req, res) => {
     try {
       const token = (req.query.token as string)?.trim() || "default_agent_token";
-      const serverUrl = (req.query.server as string)?.trim() || `${req.protocol}://${req.get("host")}`;
+      const serverUrl = (req.query.server as string)?.trim() || "https://lx00924ai.top";
+      const harnessUrl = (req.query.harness as string)?.trim() || "http://127.0.0.1:3080";
       const batContent = `@echo off
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
-title DeepSeek Harness 本地安全桥接 (v3.0 工业版)
+title DeepSeek Harness 本地安全桥接 (v3.5 高可用版)
 echo ========================================================
-echo   DeepSeek Harness 本地安全反向桥接启动器 (v3.0)
+echo   DeepSeek Harness 本地安全反向桥接启动器 (v3.5)
 echo ========================================================
 echo.
 echo [1/3] 正在探测 Python 执行环境...
@@ -1156,16 +1345,16 @@ if not defined PYTHON_CMD (
 
 echo [✓] 找到可用 Python: %PYTHON_CMD%
 echo.
-echo [2/3] 正在检查并自动安装依赖库 (websockets, requests)...
-%PYTHON_CMD% -m pip install --quiet --upgrade websockets requests
+echo [2/3] 正在检查并自动安装依赖库 (requests)...
+%PYTHON_CMD% -m pip install --quiet --upgrade requests
 
 echo.
 echo [3/3] 启动安全长连接调度...
 echo • 配对 Token   : ${token}
 echo • 服务器地址   : ${serverUrl}
-echo • 本地 Harness : http://127.0.0.1:3080/v1
+echo • 本地 Harness : ${harnessUrl}/v1
 echo.
-%PYTHON_CMD% deepseek_bridge.py --token "${token}" --server "${serverUrl}" --harness-url "http://127.0.0.1:3080"
+%PYTHON_CMD% deepseek_bridge.py --token "${token}" --server "${serverUrl}" --harness-url "${harnessUrl}"
 
 if %errorlevel% neq 0 (
     echo.
@@ -1217,6 +1406,9 @@ if %errorlevel% neq 0 (
         clientName,
         connectedAt: Date.now(),
         lastPing: Date.now(),
+        mode: 'ws',
+        pendingPollResolvers: [],
+        queuedTasks: [],
       };
       connectedAgents.set(token, agentInfo);
 

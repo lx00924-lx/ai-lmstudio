@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus, Phone, Bot, Sparkles, AlertCircle } from 'lucide-react';
+import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus, Phone, Bot, Sparkles, AlertCircle, QrCode } from 'lucide-react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatMessageDate } from '../../lib/utils';
@@ -14,6 +14,7 @@ import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/
 import { Toast } from '@capacitor/toast';
 import { API_BASE_URL } from '../../config';
 import { generateThumbnail, cacheFullImage } from '../../lib/imageHandler';
+import { CameraScannerModal } from './CameraScannerModal';
 
 interface ChatInputProps {
   onSendMessage: (text: string, type: 'text' | 'voice' | 'image', mediaUrl?: string) => void;
@@ -25,6 +26,7 @@ interface ChatInputProps {
   onToggleAgentMode?: () => void;
   agentOnline?: boolean;
   onOpenAgentSettings?: () => void;
+  onScanToken?: (token: string) => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ 
@@ -35,12 +37,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   isAgentMode = false,
   onToggleAgentMode,
   agentOnline = false,
-  onOpenAgentSettings
+  onOpenAgentSettings,
+  onScanToken
 }) => {
   const [text, setText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null); // For local cache
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const [cameraModalMode, setCameraModalMode] = useState<'camera' | 'scanner'>('camera');
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -126,55 +131,25 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   };
 
+  const openCamera = (initialMode: 'camera' | 'scanner' = 'camera') => {
+    setIsMenuOpen(false);
+    setCameraModalMode(initialMode);
+    setIsCameraModalOpen(true);
+  };
+
   const takePhoto = async () => {
-    try {
-      setIsMenuOpen(false);
-      const image = await CapCamera.getPhoto({
-        quality: 100, // Highest quality 
-        // No width/height to keep original 4K+ size
-        allowEditing: false,
-        resultType: CameraResultType.DataUrl,
-        source: CameraSource.Camera
-      });
-      
-      if (image?.dataUrl) {
-        setPreviewImage(image.dataUrl);
-      }
-    } catch (error: any) {
-      if (error?.message !== 'User cancelled photos app') {
-        console.error('Camera error:', error);
-        await Toast.show({ text: '相机访问失败，请检查权限。' });
-      }
-    }
+    openCamera('camera');
   };
 
   const pickImage = async () => {
-    try {
-      setIsMenuOpen(false);
-      const image = await CapCamera.getPhoto({
-        quality: 100,
-        // No width limit for 4K
-        allowEditing: false,
-        resultType: CameraResultType.DataUrl,
-        source: CameraSource.Photos
-      });
-      
-      if (image?.dataUrl) {
-        setPreviewImage(image.dataUrl);
-      }
-    } catch (error: any) {
-      if (error?.message !== 'User cancelled photos app') {
-        console.error('Gallery error:', error);
-        await Toast.show({ text: '相册访问失败，请检查权限。' });
-      }
-    }
+    openCamera('camera');
   };
 
   const handleCameraStart = () => {
     isLongPress.current = false;
     longPressTimer.current = setTimeout(() => {
       isLongPress.current = true;
-      pickImage();
+      openCamera('scanner');
     }, 600);
   };
 
@@ -187,7 +162,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const handleCameraClick = () => {
     if (!isLongPress.current) {
-      takePhoto();
+      openCamera('camera');
     }
   };
 
@@ -344,34 +319,44 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="flex gap-4 p-4 bg-white dark:bg-black border border-border rounded-[24px] shadow-lg mb-2"
+              className="flex gap-3 sm:gap-4 p-3 sm:p-4 bg-white dark:bg-black border border-border rounded-[24px] shadow-lg mb-2 overflow-x-auto"
             >
-              <div className="flex flex-col items-center gap-2">
+              <div className="flex flex-col items-center gap-1.5 shrink-0">
                 <Button 
                   type="button"
                   variant="ghost" 
                   size="icon" 
-                  className="w-14 h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
-                  onPointerDown={handleCameraStart}
-                  onPointerUp={handleCameraEnd}
-                  onPointerLeave={handleCameraEnd}
-                  onClick={handleCameraClick}
+                  className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
+                  onClick={() => openCamera('camera')}
                   disabled={isRecording}
                 >
-                  <Camera size={24} />
+                  <Camera size={22} className="sm:size-6" />
                 </Button>
-                <span className="text-[10px] text-muted-foreground font-medium">拍照/相册</span>
+                <span className="text-[10px] text-muted-foreground font-medium">拍照对话</span>
               </div>
-              <div className="flex flex-col items-center gap-2">
+              <div className="flex flex-col items-center gap-1.5 shrink-0">
                 <Button 
                   type="button"
                   variant="ghost" 
                   size="icon" 
-                  className="w-14 h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
+                  className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-primary/10 border border-primary/30 text-primary select-none active:scale-95 transition-all hover:bg-primary/20 shadow-sm"
+                  onClick={() => openCamera('scanner')}
+                  disabled={isRecording}
+                >
+                  <QrCode size={22} className="sm:size-6" />
+                </Button>
+                <span className="text-[10px] text-primary font-semibold">扫码连电脑</span>
+              </div>
+              <div className="flex flex-col items-center gap-1.5 shrink-0">
+                <Button 
+                  type="button"
+                  variant="ghost" 
+                  size="icon" 
+                  className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isRecording}
                 >
-                  <Plus size={24} />
+                  <Plus size={22} className="sm:size-6" />
                 </Button>
                 <span className="text-[10px] text-muted-foreground font-medium">选文件</span>
                 <input
@@ -382,19 +367,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     accept="image/*"
                 />
               </div>
-              <div className="flex flex-col items-center gap-2">
+              <div className="flex flex-col items-center gap-1.5 shrink-0">
                 <Button 
                   type="button"
                   variant="ghost" 
                   size="icon" 
-                  className="w-14 h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
+                  className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-muted/30 border border-border/50 select-none active:scale-95 transition-all hover:bg-primary/10 hover:text-primary"
                   onClick={() => {
                     setIsMenuOpen(false);
                     onStartCall?.();
                   }}
                   disabled={isRecording}
                 >
-                  <Phone size={22} className="text-primary animate-pulse" />
+                  <Phone size={20} className="sm:size-[22px] text-primary animate-pulse" />
                 </Button>
                 <span className="text-[10px] text-muted-foreground font-medium">语音通话</span>
               </div>
@@ -572,6 +557,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           </Button>
         </div>
       </div>
+
+      <CameraScannerModal
+        isOpen={isCameraModalOpen}
+        onClose={() => setIsCameraModalOpen(false)}
+        initialMode={cameraModalMode}
+        onCaptureImage={(dataUrl) => {
+          setPreviewImage(dataUrl);
+        }}
+        onScanTokenSuccess={(token) => {
+          if (onScanToken) {
+            onScanToken(token);
+          }
+        }}
+      />
     </div>
   );
 };

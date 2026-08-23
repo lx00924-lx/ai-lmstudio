@@ -16,7 +16,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AppSettings } from '../../types';
 import { API_BASE_URL } from '../../config';
-import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2, HardDrive, FolderOpen, RotateCcw, RefreshCw, Check, Type, Bot, Download, Key, Cpu, Dices, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2, HardDrive, FolderOpen, RotateCcw, RefreshCw, Check, Type, Bot, Download, Key, Cpu, Dices, CheckCircle2, AlertTriangle, QrCode, Smartphone } from 'lucide-react';
+import QRCode from 'qrcode';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { CapacitorHttp } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
@@ -70,9 +71,28 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [isCheckingAgent, setIsCheckingAgent] = React.useState(false);
   const [copiedAgentCmd, setCopiedAgentCmd] = React.useState(false);
   const [copiedAgentToken, setCopiedAgentToken] = React.useState(false);
+  const [copiedPairUrl, setCopiedPairUrl] = React.useState(false);
   const [showCodeModal, setShowCodeModal] = React.useState(false);
   const [copiedFullCode, setCopiedFullCode] = React.useState(false);
   const [isRevokingToken, setIsRevokingToken] = React.useState(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = React.useState<string>('');
+
+  React.useEffect(() => {
+    const token = (localSettings.agentToken || 'default_agent_token').trim();
+    const pairUrl = `https://lx00924ai.top?agentToken=${encodeURIComponent(token)}`;
+    QRCode.toDataURL(pairUrl, {
+      width: 220,
+      margin: 1.5,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    }).then(url => {
+      setQrCodeDataUrl(url);
+    }).catch(err => {
+      console.warn('Failed to generate agent QR:', err);
+    });
+  }, [localSettings.agentToken]);
 
   const generateBridgeScriptContent = React.useCallback(() => {
     const token = (localSettings.agentToken || 'default_agent_token').trim();
@@ -1039,7 +1059,7 @@ if %errorlevel% neq 0 (
       asrModel: localSettings.asrModel?.trim() || '',
       asrApiKey: localSettings.asrApiKey?.trim() || '',
       agentToken: (localSettings.agentToken || '').trim() || 'default_agent_token',
-      agentHarnessUrl: (localSettings.agentHarnessUrl || '').trim() || 'http://127.0.0.1:8000',
+      agentHarnessUrl: (localSettings.agentHarnessUrl || '').trim() || 'http://127.0.0.1:3080',
       backgroundOpacity: validOpacity
     };
     onSave(updatedSettings);
@@ -1738,7 +1758,7 @@ if %errorlevel% neq 0 (
 
                 <div className="relative group bg-muted/60 p-2 rounded-lg border border-border/60 font-mono text-[10px] text-muted-foreground break-all">
                   <div className="pr-14 select-all text-foreground/90">
-                    python deepseek_bridge.py --token "{localSettings.agentToken || 'default_agent_token'}" --server "{typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000'}" --harness-url "{localSettings.agentHarnessUrl || 'http://127.0.0.1:3080'}"
+                    python deepseek_bridge.py --token "{localSettings.agentToken || 'default_agent_token'}" --server "https://lx00924ai.top" --harness-url "{localSettings.agentHarnessUrl || 'http://127.0.0.1:3080'}"
                   </div>
                   <Button
                     type="button"
@@ -1746,7 +1766,7 @@ if %errorlevel% neq 0 (
                     size="sm"
                     className="absolute top-1.5 right-1.5 h-6 px-2 text-[10px] bg-background/80 hover:bg-background border border-border/50 flex items-center gap-1"
                     onClick={async () => {
-                      const serverUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+                      const serverUrl = 'https://lx00924ai.top';
                       const cmd = `python deepseek_bridge.py --token "${localSettings.agentToken || 'default_agent_token'}" --server "${serverUrl}" --harness-url "${localSettings.agentHarnessUrl || 'http://127.0.0.1:3080'}"`;
                       await navigator.clipboard.writeText(cmd);
                       setCopiedAgentCmd(true);
@@ -1759,6 +1779,49 @@ if %errorlevel% neq 0 (
                 </div>
                 <div className="text-[10px] text-muted-foreground/80 leading-relaxed">
                   💡 提示：下载后放入任意文件夹运行即可。程序启动后，上方状态将自动变为绿色在线。
+                </div>
+
+                {/* 手机扫码直连配对卡片 */}
+                <div className="mt-3 p-3 bg-primary/5 border border-primary/20 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-primary flex items-center gap-1.5">
+                      <QrCode className="w-3.5 h-3.5" />
+                      📱 手机扫码直连配对 (免手动输入 Token)
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                      onClick={async () => {
+                        const token = (localSettings.agentToken || 'default_agent_token').trim();
+                        const pairUrl = `https://lx00924ai.top?agentToken=${encodeURIComponent(token)}`;
+                        await navigator.clipboard.writeText(pairUrl);
+                        setCopiedPairUrl(true);
+                        setTimeout(() => setCopiedPairUrl(false), 2000);
+                      }}
+                    >
+                      {copiedPairUrl ? <Check className="w-3 h-3 text-emerald-500 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+                      {copiedPairUrl ? '已复制链接' : '复制手机配对链接'}
+                    </Button>
+                  </div>
+                  
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
+                    {qrCodeDataUrl ? (
+                      <div className="p-1.5 bg-white rounded-lg border border-border/80 shadow-sm shrink-0">
+                        <img src={qrCodeDataUrl} alt="Agent Pairing QR Code" className="w-28 h-28 object-contain" />
+                      </div>
+                    ) : (
+                      <div className="w-28 h-28 bg-muted rounded-lg flex items-center justify-center text-muted-foreground text-[10px] shrink-0">
+                        生成二维码中...
+                      </div>
+                    )}
+                    <div className="space-y-1 text-[11px] text-muted-foreground leading-relaxed">
+                      <p className="font-medium text-foreground">使用方法：</p>
+                      <p>1. 手机打开本 App，点击底部输入框工具栏的 <span className="font-semibold text-primary">📸 相机</span>，切换到 <span className="font-semibold text-primary">“扫码连电脑”</span> 扫描左侧码。</p>
+                      <p>2. 或直接使用手机微信/浏览器扫码打开，将自动配对并启用电脑本地 DeepSeek 算力！</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
