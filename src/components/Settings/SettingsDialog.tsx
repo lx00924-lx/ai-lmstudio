@@ -127,6 +127,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import sys
 import threading
 import time
@@ -223,6 +224,8 @@ def parse_args():
     parser.add_argument("--harness-model", type=str, default=os.getenv("HARNESS_MODEL", "deepseek-chat"), help="本地 DeepSeek 模型名称 (默认: deepseek-chat)")
     parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_TASKS, help="最大本地并发任务数 (默认 2)")
     parser.add_argument("--transport", type=str, default="auto", choices=["auto", "polling", "ws"], help="传输通信协议 (auto / polling / ws)")
+    parser.add_argument("--no-proxy", action="store_true", help="强制 Direct 直连，忽略系统所有代理与 Clash 残留")
+    parser.add_argument("--proxy", type=str, default=os.getenv("ALL_PROXY", os.getenv("HTTPS_PROXY", "")), help="手动指定代理服务器地址 (如 http://127.0.0.1:7890)")
     return parser.parse_args()
 
 def normalize_server_url(server_url: str) -> str:
@@ -488,41 +491,120 @@ def print_terminal_qr(text: str):
     except Exception as e:
         print(f"\\n    \\033[96m手机扫码直连地址:\\033[0m {text}\\n")
 
+# ======================================================================
+# 工业级高容错 HTTP 通信引擎（支持 Chrome 指纹伪装、TLS 自适应、Clash/代理死锁自愈）
+# ======================================================================
+def create_resilient_ssl_context():
+    """创建抗干扰、高兼容性的 SSL 上下文"""
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    except Exception:
+        try:
+            return ssl._create_unverified_context()
+        except Exception:
+            return None
+
+class ResilientHttpClient:
+    def __init__(self, force_no_proxy: bool = False, custom_proxy: str = ""):
+        self.ssl_ctx = create_resilient_ssl_context()
+        self.force_no_proxy = force_no_proxy
+        self.custom_proxy = (custom_proxy or "").strip()
+        
+        # 1. Direct 直连 Opener (100% 绕过系统所有代理与 Clash 残留端口)
+        self.direct_opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=self.ssl_ctx) if self.ssl_ctx else urllib.request.HTTPSHandler()
+        )
+        
+        # 2. 代理 Opener (如果用户开代理或指定代理时优先尝试)
+        if self.custom_proxy:
+            proxy_dict = {"http": self.custom_proxy, "https": self.custom_proxy}
+            self.proxy_opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler(proxy_dict),
+                urllib.request.HTTPSHandler(context=self.ssl_ctx) if self.ssl_ctx else urllib.request.HTTPSHandler()
+            )
+        else:
+            self.proxy_opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler(), # 使用系统检测代理
+                urllib.request.HTTPSHandler(context=self.ssl_ctx) if self.ssl_ctx else urllib.request.HTTPSHandler()
+            )
+        
+        # 默认优先使用的 opener
+        self.active_opener = self.direct_opener if force_no_proxy else self.proxy_opener
+        self.has_switched_to_direct = False
+
+    def request(self, url: str, data: bytes = None, headers: dict = None, method: str = "GET", timeout: int = 30) -> str:
+        base_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Connection": "close"
+        }
+        if headers:
+            base_headers.update(headers)
+
+        req = urllib.request.Request(url, data=data, headers=base_headers, method=method)
+
+        try:
+            with self.active_opener.open(req, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except Exception as e:
+            err_str = str(e)
+            is_proxy_or_ssl_error = (
+                "10061" in err_str or
+                "refused" in err_str.lower() or
+                "proxy" in err_str.lower() or
+                "UNEXPECTED_EOF" in err_str or
+                "EOF occurred" in err_str or
+                "timed out" in err_str.lower()
+            )
+            # 如果当前使用的是代理并且出现网络/SSL/10061拒连中断，立即自动熔断切换至 Direct 直连
+            if is_proxy_or_ssl_error and self.active_opener != self.direct_opener:
+                if not self.has_switched_to_direct:
+                    print(f"\\033[93m[🛡️ 网络自愈] 检测到系统代理不可用或 SSL 握手受阻，已自动熔断代理并切换至 Direct 直连！\\033[0m")
+                    self.has_switched_to_direct = True
+                self.active_opener = self.direct_opener
+                with self.direct_opener.open(req, timeout=timeout) as response:
+                    return response.read().decode("utf-8")
+            raise
+
+# 全局 HTTP 客户端单例
+GLOBAL_HTTP_CLIENT = ResilientHttpClient()
+
+def init_global_http_client(force_no_proxy: bool = False, custom_proxy: str = ""):
+    global GLOBAL_HTTP_CLIENT
+    GLOBAL_HTTP_CLIENT = ResilientHttpClient(force_no_proxy=force_no_proxy, custom_proxy=custom_proxy)
+
 def http_post_json(url: str, data: dict, timeout: int = 15) -> dict:
-    """通用同步 HTTP POST JSON 请求助手（基于标准库 urllib，零外部依赖）"""
+    """通用同步 HTTP POST JSON 请求（带自动容错与代理自愈）"""
     payload = json.dumps(data).encode("utf-8")
-    req = urllib.request.Request(
+    resp_body = GLOBAL_HTTP_CLIENT.request(
         url,
         data=payload,
-        headers={
-            "Content-Type": "application/json; charset=utf-8",
-            "User-Agent": "DeepSeek-Bridge/3.5 (Python; Universal)"
-        },
-        method="POST"
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+        timeout=timeout
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        resp_body = response.read().decode("utf-8")
-        try:
-            return json.loads(resp_body)
-        except Exception:
-            return {"raw": resp_body}
+    try:
+        return json.loads(resp_body)
+    except Exception:
+        return {"raw": resp_body}
 
 def http_get_json(url: str, timeout: int = 35) -> dict:
-    """通用同步 HTTP GET 请求助手"""
-    req = urllib.request.Request(
+    """通用同步 HTTP GET 请求（带自动容错与代理自愈）"""
+    resp_body = GLOBAL_HTTP_CLIENT.request(
         url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "DeepSeek-Bridge/3.5 (Python; Universal)"
-        },
-        method="GET"
+        headers={"Accept": "application/json"},
+        method="GET",
+        timeout=timeout
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        resp_body = response.read().decode("utf-8")
-        try:
-            return json.loads(resp_body)
-        except Exception:
-            return {"raw": resp_body}
+    try:
+        return json.loads(resp_body)
+    except Exception:
+        return {"raw": resp_body}
 
 async def execute_local_harness(
     task_id: str,
@@ -577,11 +659,11 @@ async def execute_local_harness(
             data=req_data,
             headers={
                 "Content-Type": "application/json; charset=utf-8",
-                "User-Agent": "DeepSeek-Harness-Bridge/3.5"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             },
             method="POST"
         )
-        with urllib.request.urlopen(req, timeout=150) as response:
+        with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=150) as response:
             return response.read().decode("utf-8")
 
     try:
@@ -753,10 +835,16 @@ async def run_bridge_client(args):
     server_base = normalize_server_url(args.server)
     concurrency_limit = max(1, args.concurrency)
 
+    # 初始化工业级网络客户端（自适应代理与死锁直连熔断）
+    init_global_http_client(force_no_proxy=args.no_proxy, custom_proxy=args.proxy)
+
+    proxy_mode_desc = "强制 Direct 直连" if args.no_proxy else (f"自定义代理 ({args.proxy})" if args.proxy else "自适应系统/VPN代理 (带自动熔断自愈)")
+
     print("=" * 70)
     print("\\033[92m DeepSeek Harness 本地安全反向桥接启动成功！ (v3.5 高可用双模版)\\033[0m")
     print(f" • 配对 Token     : \\033[96m{token}\\033[0m")
     print(f" • App 调度服务器 : \\033[94m{server_base}\\033[0m")
+    print(f" • 网络连接模式   : \\033[95m{proxy_mode_desc}\\033[0m")
     print(f" • 本地 Harness   : \\033[93m{args.harness_url}\\033[0m (默认 3080/v1)")
     print(f" • 本地模型       : {args.harness_model}")
     print(f" • 最大并发任务   : {concurrency_limit}")
