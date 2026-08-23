@@ -77,12 +77,38 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [isRevokingToken, setIsRevokingToken] = React.useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = React.useState<string>('');
 
+  const currentOrigin = typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null'
+    ? window.location.origin
+    : 'https://www.lx00924ai.top';
+
+  // Helper to normalize harness URL to always have http:// (or https://)
+  const getNormalizedHarnessUrl = React.useCallback((inputUrl?: string) => {
+    let raw = (inputUrl || '').trim();
+    if (!raw) return 'http://127.0.0.1:3080';
+    if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
+      raw = `http://${raw}`;
+    }
+    return raw;
+  }, []);
+
+  const normalizedHarnessUrl = getNormalizedHarnessUrl(localSettings.agentHarnessUrl);
+
+  // Helper to get raw host & port without http:// prefix for the input UI
+  const getHarnessInputDisplayValue = React.useCallback((inputUrl?: string) => {
+    if (!inputUrl) return '';
+    let val = inputUrl.trim();
+    if (val.startsWith('http://')) {
+      return val.substring(7);
+    }
+    if (val.startsWith('https://')) {
+      return val.substring(8);
+    }
+    return val;
+  }, []);
+
   React.useEffect(() => {
     const token = (localSettings.agentToken || 'default_agent_token').trim();
-    const origin = typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null'
-      ? window.location.origin
-      : 'https://lx00924ai.top';
-    const pairUrl = `${origin}?agentToken=${encodeURIComponent(token)}`;
+    const pairUrl = `${currentOrigin}?agentToken=${encodeURIComponent(token)}`;
     QRCode.toDataURL(pairUrl, {
       width: 220,
       margin: 1.5,
@@ -95,14 +121,12 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
     }).catch(err => {
       console.warn('Failed to generate agent QR:', err);
     });
-  }, [localSettings.agentToken]);
+  }, [localSettings.agentToken, currentOrigin]);
 
   const generateBridgeScriptContent = React.useCallback(() => {
     const token = (localSettings.agentToken || 'default_agent_token').trim();
-    const serverUrl = typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null'
-      ? window.location.origin
-      : 'https://lx00924ai.top';
-    const harnessUrl = (localSettings.agentHarnessUrl || 'http://127.0.0.1:3080').trim();
+    const serverUrl = currentOrigin;
+    const harnessUrl = normalizedHarnessUrl;
 
     return `#!/usr/bin/env python3
 """
@@ -1038,13 +1062,14 @@ if __name__ == "__main__":
 
   const handleDownloadStartBat = React.useCallback(() => {
     const token = (localSettings.agentToken || 'default_agent_token').trim();
-    const serverUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const serverUrl = currentOrigin;
+    const harnessUrl = normalizedHarnessUrl;
     const batContent = `@echo off
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
-title DeepSeek Harness 本地安全桥接 (v3.0 工业版)
+title DeepSeek Harness 本地安全桥接 (v3.5 工业版)
 echo ========================================================
-echo   DeepSeek Harness 本地安全反向桥接启动器 (v3.0)
+echo   DeepSeek Harness 本地安全反向桥接启动器 (v3.5)
 echo ========================================================
 echo.
 echo [1/3] 正在探测 Python 执行环境...
@@ -1078,9 +1103,9 @@ echo.
 echo [3/3] 启动安全长连接调度...
 echo • 配对 Token   : ${token}
 echo • 服务器地址   : ${serverUrl}
-echo • 本地 Harness : http://127.0.0.1:3080/v1
+echo • 本地 Harness : ${harnessUrl} (dsh /v1)
 echo.
-%PYTHON_CMD% deepseek_bridge.py --token "${token}" --server "${serverUrl}" --harness-url "http://127.0.0.1:3080"
+%PYTHON_CMD% deepseek_bridge.py --token "${token}" --server "${serverUrl}" --harness-url "${harnessUrl}"
 
 if %errorlevel% neq 0 (
     echo.
@@ -1097,7 +1122,7 @@ if %errorlevel% neq 0 (
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [localSettings.agentToken]);
+  }, [localSettings.agentToken, currentOrigin, normalizedHarnessUrl]);
 
   const handleRevokeAndResetToken = React.useCallback(async () => {
     const oldToken = localSettings.agentToken || 'default_agent_token';
@@ -1150,6 +1175,10 @@ if %errorlevel% neq 0 (
     if (open) {
       loadStorageInfo();
       checkAgentStatus();
+      const interval = setInterval(() => {
+        checkAgentStatus();
+      }, 2500);
+      return () => clearInterval(interval);
     }
   }, [open, loadStorageInfo, checkAgentStatus]);
 
@@ -2218,16 +2247,29 @@ if %errorlevel% neq 0 (
               <div className="grid grid-cols-4 items-center gap-4">
                 <Label htmlFor="agentHarnessUrl" className="text-right text-xs">Harness 服务</Label>
                 <div className="col-span-3">
-                  <Input
-                    id="agentHarnessUrl"
-                    name="agentHarnessUrl"
-                    value={localSettings.agentHarnessUrl || ''}
-                    onChange={handleChange}
-                    placeholder="默认: http://127.0.0.1:3080"
-                    className="h-8 text-xs font-mono"
-                  />
+                  <div className="relative flex rounded-md shadow-xs">
+                    <span className="inline-flex items-center px-2.5 rounded-l-md border border-r-0 border-input bg-muted text-muted-foreground text-xs font-mono select-none">
+                      http://
+                    </span>
+                    <Input
+                      id="agentHarnessUrl"
+                      name="agentHarnessUrl"
+                      value={getHarnessInputDisplayValue(localSettings.agentHarnessUrl)}
+                      onChange={(e) => {
+                        const raw = e.target.value.trim();
+                        // 移除用户不小心黏贴进来的协议头，由系统在后台自动无缝拼接
+                        const cleanHost = raw.replace(/^https?:\/\//i, '');
+                        setLocalSettings(prev => ({
+                          ...prev,
+                          agentHarnessUrl: cleanHost ? `http://${cleanHost}` : 'http://127.0.0.1:3080'
+                        }));
+                      }}
+                      placeholder="127.0.0.1:3080"
+                      className="h-8 text-xs font-mono rounded-l-none border-l-0"
+                    />
+                  </div>
                   <span className="text-[10px] text-muted-foreground mt-1 block">
-                    DeepSeek Harness (dsh) 标准服务端口为 3080 (/v1)
+                    默认: <code>127.0.0.1:3080</code> (协议头 <code>http://</code> 已在后台自动注入)
                   </span>
                 </div>
               </div>
@@ -2276,7 +2318,7 @@ if %errorlevel% neq 0 (
 
                 <div className="relative group bg-muted/60 p-2 rounded-lg border border-border/60 font-mono text-[10px] text-muted-foreground break-all">
                   <div className="pr-14 select-all text-foreground/90">
-                    python deepseek_bridge.py --token "{localSettings.agentToken || 'default_agent_token'}" --server "https://lx00924ai.top" --harness-url "{localSettings.agentHarnessUrl || 'http://127.0.0.1:3080'}"
+                    python deepseek_bridge.py --token "{localSettings.agentToken || 'default_agent_token'}" --server "{currentOrigin}" --harness-url "{normalizedHarnessUrl}"
                   </div>
                   <Button
                     type="button"
@@ -2284,8 +2326,7 @@ if %errorlevel% neq 0 (
                     size="sm"
                     className="absolute top-1.5 right-1.5 h-6 px-2 text-[10px] bg-background/80 hover:bg-background border border-border/50 flex items-center gap-1"
                     onClick={async () => {
-                      const serverUrl = 'https://lx00924ai.top';
-                      const cmd = `python deepseek_bridge.py --token "${localSettings.agentToken || 'default_agent_token'}" --server "${serverUrl}" --harness-url "${localSettings.agentHarnessUrl || 'http://127.0.0.1:3080'}"`;
+                      const cmd = `python deepseek_bridge.py --token "${localSettings.agentToken || 'default_agent_token'}" --server "${currentOrigin}" --harness-url "${normalizedHarnessUrl}"`;
                       await navigator.clipboard.writeText(cmd);
                       setCopiedAgentCmd(true);
                       setTimeout(() => setCopiedAgentCmd(false), 2000);
@@ -2313,7 +2354,7 @@ if %errorlevel% neq 0 (
                       className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground"
                       onClick={async () => {
                         const token = (localSettings.agentToken || 'default_agent_token').trim();
-                        const pairUrl = `https://lx00924ai.top?agentToken=${encodeURIComponent(token)}`;
+                        const pairUrl = `${currentOrigin}?agentToken=${encodeURIComponent(token)}`;
                         await navigator.clipboard.writeText(pairUrl);
                         setCopiedPairUrl(true);
                         setTimeout(() => setCopiedPairUrl(false), 2000);
