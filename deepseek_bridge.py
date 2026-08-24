@@ -116,11 +116,14 @@ def is_host_safe(url: str) -> bool:
         return False
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.5")
+    parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.6")
     parser.add_argument("--token", type=str, default=os.getenv("AGENT_TOKEN", ""), help="App 中生成的配对 Token")
     parser.add_argument("--server", type=str, default=os.getenv("SERVER_URL", "https://lx00924ai.top"), help="App 调度服务器地址 (默认: https://lx00924ai.top)")
-    parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "http://127.0.0.1:3080"), help="本地 DeepSeek Harness 服务地址 (默认: http://127.0.0.1:3080)")
+    parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "http://127.0.0.1:3080"), help="本地 DeepSeek Harness / Agent 服务地址 (默认: http://127.0.0.1:3080)")
     parser.add_argument("--harness-model", type=str, default=os.getenv("HARNESS_MODEL", "deepseek-chat"), help="本地 DeepSeek 模型名称 (默认: deepseek-chat)")
+    parser.add_argument("--chat-api-url", type=str, default=os.getenv("CHAT_API_URL", ""), help="可选：独立云端聊天推理接口 (如火山方舟 https://ark.cn-beijing.volces.com/api/v3)")
+    parser.add_argument("--chat-api-key", type=str, default=os.getenv("CHAT_API_KEY", ""), help="可选：云端聊天 API Key")
+    parser.add_argument("--chat-model", type=str, default=os.getenv("CHAT_MODEL", ""), help="可选：云端聊天模型名称 (如 deepseek-v4-pro-ga-260813)")
     parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_TASKS, help="最大本地并发任务数 (默认 2)")
     parser.add_argument("--transport", type=str, default="auto", choices=["auto", "polling", "ws"], help="传输通信协议 (auto / polling / ws)")
     parser.add_argument("--no-proxy", action="store_true", help="强制 Direct 直连，忽略系统所有代理与 Clash 残留")
@@ -557,87 +560,161 @@ async def execute_local_harness(
     harness_url: str,
     model_name: str,
     session_id: str,
-    on_step_callback
+    on_step_callback,
+    extra_chat_config: dict = None
 ):
     """
-    透明安全转发至本地 DeepSeek Harness (dsh 3080/v1) 服务
-    纯内存无状态转发，不落盘任何对话记录或密钥。
+    智能多协议自适应转发至本地 DeepSeek Harness / DSH Agent / 本地模型服务：
+    1. 优先适配 DSH Local Build 原生 /session.prompt 与 /api/session.prompt
+    2. 自动回退探测 /v1/chat/completions, /api/chat, /chat/completions
+    3. 支持直连云端聊天推理接口 (如火山方舟 Ark / OpenAI 兼容接口) 进行协同
+    4. 纯内存无状态转发，不落盘任何对话记录或密钥。
     """
     harness_base = harness_url.rstrip("/")
+    extra_chat_config = extra_chat_config or {}
     
-    # 1. SSRF 攻击防御：强制仅允许连接本地回环地址
-    if not is_host_safe(harness_base):
+    # 1. SSRF 攻击防御：仅在连接本地服务时校验本地回环
+    is_cloud_api = harness_base.startswith("https://") or "volces.com" in harness_base or "deepseek.com" in harness_base or "openai.com" in harness_base
+    if not is_cloud_api and not is_host_safe(harness_base):
         err_msg = f"🛡️ [SSRF 安全拦截] 目标服务地址 ({harness_base}) 非本地回环地址 (127.0.0.1 / localhost)，禁止发起非本地请求。"
         await on_step_callback(f"❌ [Task:{task_id[:6]}] SSRF 安全拦截")
         return False, err_msg
 
-    if not harness_base.endswith("/v1"):
-        chat_endpoint = f"{harness_base}/v1/chat/completions"
+    await on_step_callback(f"🚀 [1/3] 已接收到任务，正在调用本地 DeepSeek Harness Agent ({model_name})...")
+
+    # 构造候选请求端点与对应 Payload
+    candidate_endpoints = []
+
+    # 如果用户明确指定了带路径的地址
+    if harness_base.endswith("/session.prompt") or harness_base.endswith("/session/prompt"):
+        candidate_endpoints.append((harness_base, {
+            "prompt": prompt,
+            "sessionId": session_id or f"session_{task_id}",
+            "model": model_name or "deepseek-chat",
+            "messages": messages if messages else [{"role": "user", "content": prompt}]
+        }, "DSH Session 接口"))
+    elif harness_base.endswith("/v1") or harness_base.endswith("/chat/completions"):
+        endpoint_url = harness_base if harness_base.endswith("/chat/completions") else f"{harness_base}/chat/completions"
+        candidate_endpoints.append((endpoint_url, {
+            "model": model_name or "deepseek-chat",
+            "messages": messages if messages else [{"role": "user", "content": prompt}],
+            "stream": False,
+            "temperature": 0.7
+        }, "OpenAI 兼容接口"))
     else:
-        chat_endpoint = f"{harness_base}/chat/completions"
+        # 默认探测顺序：
+        # 1. DSH Local Build session.prompt
+        candidate_endpoints.append((f"{harness_base}/session.prompt", {
+            "prompt": prompt,
+            "sessionId": session_id or f"session_{task_id}",
+            "model": model_name or "deepseek-chat",
+            "messages": messages if messages else [{"role": "user", "content": prompt}]
+        }, "DSH Local Build 原生接口 (/session.prompt)"))
+        
+        # 2. DSH api/session.prompt
+        candidate_endpoints.append((f"{harness_base}/api/session.prompt", {
+            "prompt": prompt,
+            "sessionId": session_id or f"session_{task_id}",
+            "model": model_name or "deepseek-chat"
+        }, "DSH API 接口 (/api/session.prompt)"))
 
-    await on_step_callback(f"🚀 [1/3] 已接收到任务，正在调用本地 DeepSeek Harness ({model_name})...")
+        # 3. 标准 OpenAI 兼容接口 (/v1/chat/completions)
+        candidate_endpoints.append((f"{harness_base}/v1/chat/completions", {
+            "model": model_name or "deepseek-chat",
+            "messages": messages if messages else [{"role": "user", "content": prompt}],
+            "stream": False,
+            "temperature": 0.7
+        }, "OpenAI 兼容接口 (/v1/chat/completions)"))
 
-    # 构造标准 OpenAI 兼容推理请求体
-    payload = {
-        "model": model_name or "deepseek-chat",
-        "messages": messages if messages else [{"role": "user", "content": prompt}],
-        "stream": False,
-        "temperature": 0.7
-    }
+        # 4. 其他常见本地 Agent 接口
+        candidate_endpoints.append((f"{harness_base}/api/chat", {
+            "prompt": prompt,
+            "model": model_name or "deepseek-chat",
+            "messages": messages if messages else [{"role": "user", "content": prompt}]
+        }, "本地 Agent 接口 (/api/chat)"))
 
-    req_data = json.dumps(payload).encode("utf-8")
-
-    if len(req_data) > MAX_PAYLOAD_BYTES:
-        err_msg = f"❌ [安全拦截] 任务报文体积 ({len(req_data)} bytes) 超过安全限制 (10MB)。"
-        await on_step_callback(err_msg)
-        return False, err_msg
-
-    await on_step_callback("⚡ [2/3] 本地模型正在进行深度推理与任务执行...")
+    await on_step_callback("⚡ [2/3] 本地模型/Agent 正在进行深度推理与任务执行...")
 
     loop = asyncio.get_running_loop()
+    last_err = None
+    output_content = None
+    success_endpoint_name = ""
 
-    def do_request():
-        req = urllib.request.Request(
-            chat_endpoint,
-            data=req_data,
-            headers={
+    for target_url, payload, ep_name in candidate_endpoints:
+        req_data = json.dumps(payload).encode("utf-8")
+        if len(req_data) > MAX_PAYLOAD_BYTES:
+            continue
+
+        def do_request(url=target_url, data=req_data):
+            headers = {
                 "Content-Type": "application/json; charset=utf-8",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            },
-            method="POST"
-        )
-        with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=150) as response:
-            return response.read().decode("utf-8")
+            }
+            # 如果是云端接口或者配置了 API Key
+            auth_key = extra_chat_config.get("apiKey")
+            if auth_key:
+                headers["Authorization"] = f"Bearer {auth_key}"
 
-    try:
-        raw_resp = await loop.run_in_executor(None, do_request)
-        resp_json = json.loads(raw_resp)
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=120) as response:
+                return response.read().decode("utf-8")
 
-        # 提取回复内容
-        choices = resp_json.get("choices", [])
-        if not choices:
-            output_content = str(resp_json)
-        else:
-            first_choice = choices[0]
-            output_content = first_choice.get("message", {}).get("content", "")
+        try:
+            raw_resp = await loop.run_in_executor(None, do_request)
+            
+            # 解析响应
+            try:
+                resp_json = json.loads(raw_resp)
+                if isinstance(resp_json, dict):
+                    # 1. OpenAI 格式 choices[0].message.content
+                    if "choices" in resp_json and len(resp_json["choices"]) > 0:
+                        output_content = resp_json["choices"][0].get("message", {}).get("content", "")
+                    # 2. DSH / 通用 agent 格式
+                    elif "result" in resp_json:
+                        output_content = resp_json["result"] if isinstance(resp_json["result"], str) else json.dumps(resp_json["result"], ensure_ascii=False)
+                    elif "response" in resp_json:
+                        output_content = resp_json["response"] if isinstance(resp_json["response"], str) else json.dumps(resp_json["response"], ensure_ascii=False)
+                    elif "content" in resp_json:
+                        output_content = resp_json["content"] if isinstance(resp_json["content"], str) else json.dumps(resp_json["content"], ensure_ascii=False)
+                    elif "output" in resp_json:
+                        output_content = resp_json["output"] if isinstance(resp_json["output"], str) else json.dumps(resp_json["output"], ensure_ascii=False)
+                    elif "text" in resp_json:
+                        output_content = resp_json["text"] if isinstance(resp_json["text"], str) else json.dumps(resp_json["text"], ensure_ascii=False)
+                    else:
+                        output_content = json.dumps(resp_json, ensure_ascii=False)
+                else:
+                    output_content = str(resp_json)
+            except Exception:
+                output_content = raw_resp
 
-        await on_step_callback("✅ [3/3] 本地 DeepSeek 智能体执行完毕，正在向 App 调度中心回传结果...")
-        return True, output_content
+            success_endpoint_name = ep_name
+            break
 
-    except urllib.error.URLError as e:
-        err_str = str(e.reason if hasattr(e, "reason") else e)
-        error_tip = (
-            f"❌ 连接本地 DeepSeek Harness 服务失败 ({chat_endpoint})。\n"
-            f"   原因: {err_str}\n"
-            f"   💡 请确认本地已启动 DeepSeek Harness 服务 (默认: http://127.0.0.1:3080/v1)。"
-        )
-        await on_step_callback(f"❌ 本地服务连接失败: {err_str}")
-        return False, error_tip
-    except Exception as e:
-        err_str = str(e)
-        await on_step_callback(f"❌ 本地执行异常: {err_str}")
-        return False, f"本地智能体执行发生异常: {err_str}"
+        except urllib.error.HTTPError as he:
+            # 遇到 405 (Method Not Allowed) 或 404 (Not Found)，自动无缝尝试下一个候选端点
+            last_err = f"HTTP {he.code} ({he.reason})"
+            continue
+        except urllib.error.URLError as ue:
+            last_err = str(ue.reason if hasattr(ue, "reason") else ue)
+            continue
+        except Exception as ex:
+            last_err = str(ex)
+            continue
+
+    if output_content is not None:
+        await on_step_callback(f"✅ [3/3] 本地 DeepSeek 智能体通过 {success_endpoint_name} 执行完毕，正在向 App 调度中心回传结果...")
+        return True, str(output_content)
+
+    # 如果所有候选端点均未能成功响应
+    error_tip = (
+        f"❌ 连接本地 DeepSeek Harness / Agent 服务失败 ({harness_base})。\n"
+        f"   最近一次尝试报错: {last_err}\n"
+        f"   💡 排查指南:\n"
+        f"   1. 请确认本地 3080 端口已正常开启 (http://127.0.0.1:3080)；\n"
+        f"   2. 若使用其他端口，可在启动命令加上 `--harness-url \"http://127.0.0.1:端口\"`。"
+    )
+    await on_step_callback(f"❌ 本地服务连接失败: {last_err or '所有端点均不可达'}")
+    return False, error_tip
 
 # 正在执行的任务集合
 running_tasks = {}
@@ -716,9 +793,15 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
             except Exception:
                 pass
 
+        extra_config = {
+            "apiEndpoint": task_data.get("apiEndpoint") or args.chat_api_url,
+            "apiKey": task_data.get("apiKey") or args.chat_api_key,
+            "chatModel": task_data.get("chatModel") or args.chat_model,
+        }
+
         async with semaphore:
             success, output = await execute_local_harness(
-                task_id, prompt, messages, harness_url, model_name, session_id, on_step
+                task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config
             )
 
         status_tag = "✓ 任务完成" if success else "✗ 任务异常"
@@ -878,8 +961,14 @@ async def run_bridge_client(args):
                                 except Exception:
                                     pass
 
+                            extra_config = {
+                                "apiEndpoint": msg.get("apiEndpoint") or args.chat_api_url,
+                                "apiKey": msg.get("apiKey") or args.chat_api_key,
+                                "chatModel": msg.get("chatModel") or args.chat_model,
+                            }
+
                             success, output = await execute_local_harness(
-                                task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb
+                                task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config
                             )
 
                             status_tag = "✓ 任务完成" if success else "✗ 任务异常"

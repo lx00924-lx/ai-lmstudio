@@ -553,8 +553,30 @@ export default function App() {
       });
     };
 
-    const handleAgentTaskFinished = (data: { taskId: string; messageId: string; success: boolean; result?: string; error?: string }) => {
+    const handleAgentTaskFinished = (data: { taskId: string; messageId: string; success: boolean; result?: any; error?: string }) => {
       if (!data || !data.messageId) return;
+      
+      let parsedOutput = '';
+      let isSuccess = data.success !== false;
+      let extraSteps: string[] = [];
+
+      if (data.result) {
+        if (typeof data.result === 'object') {
+          if (data.result.status === 'failed') isSuccess = false;
+          if (Array.isArray(data.result.steps)) {
+            extraSteps = data.result.steps;
+          }
+          parsedOutput = typeof data.result.rawOutput === 'string'
+            ? data.result.rawOutput
+            : (data.result.output || JSON.stringify(data.result, null, 2));
+        } else {
+          parsedOutput = String(data.result);
+        }
+      } else if (data.error) {
+        parsedOutput = String(data.error);
+        isSuccess = false;
+      }
+
       setState(prev => {
         const msgs = Array.isArray(prev.messages) ? prev.messages : [];
         return {
@@ -565,11 +587,12 @@ export default function App() {
                   ...msg,
                   agentExecution: {
                     ...(msg.agentExecution || { taskId: data.taskId, steps: [] }),
-                    status: data.success ? 'completed' : 'failed',
-                    rawOutput: data.result || data.error,
+                    status: isSuccess ? 'completed' : 'failed',
+                    rawOutput: parsedOutput,
                     steps: [
                       ...(msg.agentExecution?.steps || []),
-                      data.success ? '本地 Agent 执行完毕，正在由模型总结思考回答...' : `Agent 执行失败: ${data.error || '未知错误'}`
+                      ...extraSteps.filter(s => !(msg.agentExecution?.steps || []).includes(s)),
+                      isSuccess ? '本地 Agent 执行完毕，正在由模型总结思考回答...' : `Agent 执行提示: ${data.error || parsedOutput || '异常'}`
                     ]
                   }
                 }

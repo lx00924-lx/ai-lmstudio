@@ -422,15 +422,20 @@ const MessageItem: React.FC<{
                         <span className="break-all text-foreground/80">{st}</span>
                       </div>
                     ))}
-                    {message.agentExecution.rawOutput && (
-                      <div className="mt-2 pt-2 border-t border-border/50 text-[10px]">
-                        <div className="text-muted-foreground font-semibold mb-1">本地 Harness 产出摘要:</div>
-                        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap bg-muted/50 p-2 rounded-lg text-foreground/90 font-mono select-text border border-border/40">
-                          {message.agentExecution.rawOutput.slice(0, 600)}
-                          {message.agentExecution.rawOutput.length > 600 ? '...' : ''}
+                    {message.agentExecution.rawOutput && (() => {
+                      const rawOutputText = typeof message.agentExecution.rawOutput === 'string'
+                        ? message.agentExecution.rawOutput
+                        : JSON.stringify(message.agentExecution.rawOutput, null, 2);
+                      return (
+                        <div className="mt-2 pt-2 border-t border-border/50 text-[10px]">
+                          <div className="text-muted-foreground font-semibold mb-1">本地 Harness 产出摘要:</div>
+                          <div className="max-h-32 overflow-y-auto whitespace-pre-wrap bg-muted/50 p-2 rounded-lg text-foreground/90 font-mono select-text border border-border/40">
+                            {rawOutputText.slice(0, 600)}
+                            {rawOutputText.length > 600 ? '...' : ''}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 </details>
               )}

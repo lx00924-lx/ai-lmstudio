@@ -344,7 +344,10 @@ async function runServerSideGeneration({
           prompt: rawUserPrompt,
           messages: workingMessages.slice(-5),
           harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3080",
-          model: settings?.modelName || "deepseek-chat"
+          model: settings?.modelName || "deepseek-chat",
+          apiEndpoint: settings?.apiEndpoint || "",
+          apiKey: settings?.apiKey || "",
+          chatModel: settings?.modelName || ""
         };
 
         // Dispatch via WS if available, otherwise deliver to pending long-polling or task queue
