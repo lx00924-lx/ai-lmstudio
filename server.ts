@@ -173,6 +173,15 @@ interface ActiveGeneration {
 
 const activeGenerations = new Map<string, ActiveGeneration>();
 
+interface DshSessionInfo {
+  id: string;
+  sessionId?: string;
+  title: string;
+  workspace?: string;
+  updatedAt?: string | number;
+  model?: string;
+}
+
 // Agent Hub state for reverse WebSocket and HTTP Long-Polling connections
 interface ConnectedAgent {
   ws?: WSWebSocket;
@@ -183,6 +192,8 @@ interface ConnectedAgent {
   mode: 'ws' | 'polling';
   pendingPollResolvers?: Array<(taskMsg: any) => void>;
   queuedTasks?: any[];
+  workspaces?: string[];
+  sessions?: DshSessionInfo[];
 }
 
 const connectedAgents = new Map<string, ConnectedAgent>();
@@ -336,11 +347,15 @@ async function runServerSideGeneration({
           });
         });
 
-        const sessionId = workingMessages[0]?.id || `session_${userId}`;
+        const selectedSessionId = (settings?.agentSessionId || "").trim();
+        const selectedWorkspace = (settings?.agentWorkspace || "deepseek-agent").trim();
+        const sessionId = selectedSessionId || workingMessages[0]?.id || `session_${userId}`;
         const taskPayload = {
           type: "run_agent",
           taskId,
           sessionId,
+          agentSessionId: selectedSessionId,
+          agentWorkspace: selectedWorkspace,
           prompt: rawUserPrompt,
           messages: workingMessages.slice(-5),
           harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3080",
@@ -1211,6 +1226,18 @@ async function startServer() {
     res.json({ success: true, timestamp: Date.now() });
   });
 
+  app.get("/deepseek_bridge.py", async (req, res) => {
+    try {
+      const scriptPath = path.resolve(process.cwd(), "deepseek_bridge.py");
+      const content = await fs.readFile(scriptPath, "utf-8");
+      res.setHeader("Content-Type", "text/x-python; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="deepseek_bridge.py"');
+      res.send(content);
+    } catch (err: any) {
+      res.status(404).send("File not found");
+    }
+  });
+
   app.get("/api/agent/status", (req, res) => {
     const token = ((req.query.token as string) || "").trim() || "default_agent_token";
     const agent = connectedAgents.get(token);
@@ -1220,9 +1247,126 @@ async function startServer() {
     );
 
     if (isOnline) {
-      res.json({ online: true, clientName: agent.clientName, connectedAt: agent.connectedAt, mode: agent.mode });
+      res.json({
+        online: true,
+        clientName: agent.clientName,
+        connectedAt: agent.connectedAt,
+        mode: agent.mode,
+        workspaces: agent.workspaces || ["deepseek-agent"],
+        sessions: agent.sessions || []
+      });
     } else {
-      res.json({ online: false });
+      res.json({ online: false, workspaces: ["deepseek-agent"], sessions: [] });
+    }
+  });
+
+  // Get agent workspaces and active session list
+  app.get("/api/agent/sessions", (req, res) => {
+    const token = ((req.query.token as string) || "").trim() || "default_agent_token";
+    const agent = connectedAgents.get(token);
+    const isOnline = agent && (
+      (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) ||
+      (Date.now() - agent.lastPing < 45000)
+    );
+
+    if (agent && agent.ws && agent.ws.readyState === WSWebSocket.OPEN) {
+      try {
+        agent.ws.send(JSON.stringify({ type: "get_sessions" }));
+      } catch {}
+    }
+
+    res.json({
+      online: !!isOnline,
+      workspaces: agent?.workspaces || ["deepseek-agent"],
+      sessions: agent?.sessions || [],
+      clientName: agent?.clientName || "DeepSeek-Harness-Local"
+    });
+  });
+
+  // Create new session in local DeepSeek Harness via bridge
+  app.post("/api/agent/create-session", async (req, res) => {
+    try {
+      const { token, workspace, title, model } = req.body;
+      const targetToken = (token || "").trim() || "default_agent_token";
+      const agent = connectedAgents.get(targetToken);
+
+      if (!agent) {
+        return res.status(404).json({ error: "本地 Agent 桥接未连接，无法在本地创建会话" });
+      }
+
+      if (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) {
+        const createTaskId = `create_session_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        
+        const createPromise = new Promise<any>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("本地创建会话超时 (10秒)"));
+          }, 10000);
+
+          const listener = (raw: any) => {
+            try {
+              const msg = JSON.parse(raw.toString());
+              if (msg.type === "create_session_result" && (msg.taskId === createTaskId || !msg.taskId)) {
+                clearTimeout(timeout);
+                agent.ws?.off("message", listener);
+                resolve(msg);
+              }
+            } catch {}
+          };
+          agent.ws?.on("message", listener);
+        });
+
+        agent.ws.send(JSON.stringify({
+          type: "create_session",
+          taskId: createTaskId,
+          workspace: workspace || "deepseek-agent",
+          title: title || `新对话 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`,
+          model: model || "deepseek-chat"
+        }));
+
+        const result = await createPromise;
+        if (result.workspaces) agent.workspaces = result.workspaces;
+        if (result.sessions) agent.sessions = result.sessions;
+
+        io.emit("agent_sessions_updated", {
+          token: targetToken,
+          workspaces: agent.workspaces || ["deepseek-agent"],
+          sessions: agent.sessions || []
+        });
+
+        return res.json({
+          success: true,
+          sessionId: result.sessionId,
+          session: result.session,
+          sessions: agent.sessions,
+          workspaces: agent.workspaces
+        });
+      }
+
+      res.status(500).json({ error: "Agent 连接模式不支持即时创建会话，请确认桥接程序已正常启动" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "创建本地会话失败" });
+    }
+  });
+
+  // Sync sessions report from agent
+  app.post("/api/agent/sync-sessions", (req, res) => {
+    try {
+      const { token, workspaces, sessions } = req.body;
+      const targetToken = (token || "").trim() || "default_agent_token";
+      const agent = connectedAgents.get(targetToken);
+      if (agent) {
+        if (workspaces) agent.workspaces = workspaces;
+        if (sessions) agent.sessions = sessions;
+        agent.lastPing = Date.now();
+        io.emit("agent_sessions_updated", {
+          token: targetToken,
+          workspaces: agent.workspaces || ["deepseek-agent"],
+          sessions: agent.sessions || []
+        });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -1446,6 +1590,15 @@ if %errorlevel% neq 0 (
                 steps: msg.steps || [],
               });
             }
+          } else if (msg.type === "sync_sessions" || msg.type === "sessions_result") {
+            agentInfo.workspaces = msg.workspaces || ["deepseek-agent"];
+            agentInfo.sessions = msg.sessions || [];
+            console.log(`[Agent Hub] Synced ${agentInfo.sessions.length} sessions for agent [${token}]`);
+            io.emit("agent_sessions_updated", {
+              token,
+              workspaces: agentInfo.workspaces,
+              sessions: agentInfo.sessions
+            });
           } else if (msg.type === "pong" || msg.type === "app_pong") {
             agentInfo.lastPing = Date.now();
           }

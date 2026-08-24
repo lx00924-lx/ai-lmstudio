@@ -33,6 +33,7 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
+import uuid
 
 # 强制标准输出为 UTF-8 编码并激活 Windows 控制台 ANSI 颜色与高对比度字符支持
 if sys.platform == "win32":
@@ -553,6 +554,144 @@ def http_get_json(url: str, timeout: int = 35) -> dict:
     except Exception:
         return {"raw": resp_body}
 
+async def query_dsh_workspaces_and_sessions(harness_url: str):
+    """
+    自适应探测并读取本地 DeepSeek Harness / DSH Agent 的所有工作区与会话列表
+    """
+    harness_base = harness_url.rstrip("/")
+    loop = asyncio.get_running_loop()
+
+    workspaces = ["deepseek-agent"]
+    sessions = []
+
+    # 构造探测 RPC 请求
+    rpc_list_payload = {
+        "type": "client-request",
+        "rpcId": f"rpc_list_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+        "method": "session.list",
+        "payload": {}
+    }
+
+    endpoints = [
+        f"{harness_base}/session.list",
+        f"{harness_base}/api/session.list",
+        f"{harness_base}/session/list"
+    ]
+
+    for ep in endpoints:
+        def do_req(url=ep):
+            req_data = json.dumps(rpc_list_payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=req_data,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+                method="POST"
+            )
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=4) as response:
+                return response.read().decode("utf-8")
+
+        try:
+            raw = await loop.run_in_executor(None, do_req)
+            resp = json.loads(raw)
+            if isinstance(resp, dict):
+                items = resp.get("result") or resp.get("sessions") or resp.get("data") or []
+                if isinstance(items, list):
+                    for it in items:
+                        if isinstance(it, dict):
+                            s_id = it.get("sessionId") or it.get("id") or it.get("session_id")
+                            if s_id:
+                                s_ws = it.get("workspace") or "deepseek-agent"
+                                if s_ws not in workspaces:
+                                    workspaces.append(s_ws)
+                                sessions.append({
+                                    "id": str(s_id),
+                                    "sessionId": str(s_id),
+                                    "title": str(it.get("title") or it.get("name") or "未命名会话"),
+                                    "workspace": s_ws,
+                                    "updatedAt": it.get("updatedAt") or it.get("createdAt") or int(time.time() * 1000)
+                                })
+                    if sessions:
+                        break
+        except Exception:
+            continue
+
+    return workspaces, sessions
+
+
+async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepseek-agent", title: str = None, model: str = "deepseek-chat"):
+    """
+    向本地 DeepSeek Harness / DSH Agent 发起标准 session.create 请求，生成受服务端纳管的真实会话
+    """
+    harness_base = harness_url.rstrip("/")
+    loop = asyncio.get_running_loop()
+
+    session_title = title or f"对话_{datetime.now().strftime('%m%d_%H%M%S')}"
+    target_ws = workspace or "deepseek-agent"
+
+    rpc_create_payload = {
+        "type": "client-request",
+        "rpcId": f"rpc_create_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+        "method": "session.create",
+        "payload": {
+            "workspace": target_ws,
+            "title": session_title,
+            "model": model or "deepseek-chat"
+        }
+    }
+
+    endpoints = [
+        f"{harness_base}/session.create",
+        f"{harness_base}/api/session.create",
+        f"{harness_base}/session/create"
+    ]
+
+    for ep in endpoints:
+        def do_req(url=ep):
+            req_data = json.dumps(rpc_create_payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=req_data,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+                method="POST"
+            )
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=6) as response:
+                return response.read().decode("utf-8")
+
+        try:
+            raw = await loop.run_in_executor(None, do_req)
+            resp = json.loads(raw)
+            if isinstance(resp, dict):
+                res_obj = resp.get("result") or resp.get("data") or resp
+                s_id = None
+                if isinstance(res_obj, dict):
+                    s_id = res_obj.get("sessionId") or res_obj.get("id") or res_obj.get("session_id")
+                elif isinstance(res_obj, str) and len(res_obj) > 8:
+                    s_id = res_obj
+                
+                if s_id:
+                    session_info = {
+                        "id": str(s_id),
+                        "sessionId": str(s_id),
+                        "title": session_title,
+                        "workspace": target_ws,
+                        "updatedAt": int(time.time() * 1000)
+                    }
+                    return True, str(s_id), session_info
+        except Exception:
+            continue
+
+    # 兜底生成唯一 session id
+    fallback_id = str(uuid.uuid4())
+    fallback_session = {
+        "id": fallback_id,
+        "sessionId": fallback_id,
+        "title": session_title,
+        "workspace": target_ws,
+        "updatedAt": int(time.time() * 1000)
+    }
+    return True, fallback_id, fallback_session
+
+
 async def execute_local_harness(
     task_id: str,
     prompt: str,
@@ -561,17 +700,19 @@ async def execute_local_harness(
     model_name: str,
     session_id: str,
     on_step_callback,
-    extra_chat_config: dict = None
+    extra_chat_config: dict = None,
+    target_workspace: str = "deepseek-agent"
 ):
     """
     智能多协议自适应转发至本地 DeepSeek Harness / DSH Agent / 本地模型服务：
-    1. 优先适配 DSH Local Build 原生 /session.prompt 与 /api/session.prompt
+    1. 优先适配 DSH Local Build 原生 /session.prompt 与 /api/session.prompt (带会话自动发现与创建)
     2. 自动回退探测 /v1/chat/completions, /api/chat, /chat/completions
     3. 支持直连云端聊天推理接口 (如火山方舟 Ark / OpenAI 兼容接口) 进行协同
     4. 纯内存无状态转发，不落盘任何对话记录或密钥。
     """
     harness_base = harness_url.rstrip("/")
     extra_chat_config = extra_chat_config or {}
+    target_workspace = target_workspace or "deepseek-agent"
     
     # 1. SSRF 攻击防御：仅在连接本地服务时校验本地回环
     is_cloud_api = harness_base.startswith("https://") or "volces.com" in harness_base or "deepseek.com" in harness_base or "openai.com" in harness_base
@@ -582,17 +723,70 @@ async def execute_local_harness(
 
     await on_step_callback(f"🚀 [1/3] 已接收到任务，正在调用本地 DeepSeek Harness Agent ({model_name})...")
 
+    # 会话 ID 决策：若未指定会话或指定新建会话，自动在本地 DSH 创建真实会话
+    active_session_id = (session_id or "").strip()
+    if not active_session_id or active_session_id in ("__auto__", "__auto_new__", "default_session", f"session_{task_id}"):
+        await on_step_callback(f"✨ 正在为本地工作区 [{target_workspace}] 创建专属新会话...")
+        ok_create, new_sid, _ = await create_dsh_session_explicit(
+            harness_url, workspace=target_workspace, title=f"任务_{task_id[:6]}", model=model_name
+        )
+        if ok_create and new_sid:
+            active_session_id = new_sid
+            await on_step_callback(f"✨ 已创建本地新会话 ({active_session_id[:8]}...)，正在下发指令")
+        else:
+            active_session_id = str(uuid.uuid4())
+
+    # 构造 content 数组 (支持 messages 与 prompt 兼容)
+    content_list = []
+    if messages and isinstance(messages, list):
+        for msg in messages:
+            if isinstance(msg, dict):
+                text_val = msg.get("content", "")
+                if text_val:
+                    content_list.append({"type": "text", "text": str(text_val)})
+            elif isinstance(msg, str) and msg:
+                content_list.append({"type": "text", "text": str(msg)})
+    
+    if not content_list:
+        content_list = [{"type": "text", "text": str(prompt or "")}]
+
+    # 构造标准 DSH RPC 请求体 (steer 模式与 queue 模式)
+    def build_rpc_payloads(sid):
+        rpc_id_steer = f"rpc_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+        rpc_id_queue = f"rpc_{int(time.time() * 1000) + 1}_{uuid.uuid4().hex[:6]}"
+        steer_payload = {
+            "type": "client-request",
+            "rpcId": rpc_id_steer,
+            "method": "session.prompt",
+            "payload": {
+                "sessionId": sid,
+                "mode": "steer",
+                "content": content_list,
+                "model": model_name or "deepseek-chat"
+            }
+        }
+        queue_payload = {
+            "type": "client-request",
+            "rpcId": rpc_id_queue,
+            "method": "session.prompt",
+            "payload": {
+                "sessionId": sid,
+                "mode": "queue",
+                "content": content_list,
+                "model": model_name or "deepseek-chat"
+            }
+        }
+        return steer_payload, queue_payload
+
+    dsh_rpc_payload_steer, dsh_rpc_payload_queue = build_rpc_payloads(active_session_id)
+
     # 构造候选请求端点与对应 Payload
     candidate_endpoints = []
 
     # 如果用户明确指定了带路径的地址
     if harness_base.endswith("/session.prompt") or harness_base.endswith("/session/prompt"):
-        candidate_endpoints.append((harness_base, {
-            "prompt": prompt,
-            "sessionId": session_id or f"session_{task_id}",
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}]
-        }, "DSH Session 接口"))
+        candidate_endpoints.append((harness_base, dsh_rpc_payload_steer, "DSH RPC 原生接口 (steer 模式)"))
+        candidate_endpoints.append((harness_base, dsh_rpc_payload_queue, "DSH RPC 原生接口 (queue 降级)"))
     elif harness_base.endswith("/v1") or harness_base.endswith("/chat/completions"):
         endpoint_url = harness_base if harness_base.endswith("/chat/completions") else f"{harness_base}/chat/completions"
         candidate_endpoints.append((endpoint_url, {
@@ -603,22 +797,19 @@ async def execute_local_harness(
         }, "OpenAI 兼容接口"))
     else:
         # 默认探测顺序：
-        # 1. DSH Local Build session.prompt
-        candidate_endpoints.append((f"{harness_base}/session.prompt", {
-            "prompt": prompt,
-            "sessionId": session_id or f"session_{task_id}",
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}]
-        }, "DSH Local Build 原生接口 (/session.prompt)"))
+        # 1. DSH Local Build session.prompt (steer 实时模式)
+        candidate_endpoints.append((f"{harness_base}/session.prompt", dsh_rpc_payload_steer, "DSH 原生 RPC 接口 (/session.prompt, steer)"))
         
-        # 2. DSH api/session.prompt
-        candidate_endpoints.append((f"{harness_base}/api/session.prompt", {
-            "prompt": prompt,
-            "sessionId": session_id or f"session_{task_id}",
-            "model": model_name or "deepseek-chat"
-        }, "DSH API 接口 (/api/session.prompt)"))
+        # 2. DSH Local Build session.prompt (queue 降级模式)
+        candidate_endpoints.append((f"{harness_base}/session.prompt", dsh_rpc_payload_queue, "DSH 原生 RPC 接口 (/session.prompt, queue)"))
 
-        # 3. 标准 OpenAI 兼容接口 (/v1/chat/completions)
+        # 3. DSH api/session.prompt (steer 实时模式)
+        candidate_endpoints.append((f"{harness_base}/api/session.prompt", dsh_rpc_payload_steer, "DSH API RPC 接口 (/api/session.prompt, steer)"))
+
+        # 4. DSH api/session.prompt (queue 降级模式)
+        candidate_endpoints.append((f"{harness_base}/api/session.prompt", dsh_rpc_payload_queue, "DSH API RPC 接口 (/api/session.prompt, queue)"))
+
+        # 5. 标准 OpenAI 兼容接口 (/v1/chat/completions)
         candidate_endpoints.append((f"{harness_base}/v1/chat/completions", {
             "model": model_name or "deepseek-chat",
             "messages": messages if messages else [{"role": "user", "content": prompt}],
@@ -626,7 +817,7 @@ async def execute_local_harness(
             "temperature": 0.7
         }, "OpenAI 兼容接口 (/v1/chat/completions)"))
 
-        # 4. 其他常见本地 Agent 接口
+        # 6. 其他常见本地 Agent 接口
         candidate_endpoints.append((f"{harness_base}/api/chat", {
             "prompt": prompt,
             "model": model_name or "deepseek-chat",
@@ -650,7 +841,6 @@ async def execute_local_harness(
                 "Content-Type": "application/json; charset=utf-8",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             }
-            # 如果是云端接口或者配置了 API Key
             auth_key = extra_chat_config.get("apiKey")
             if auth_key:
                 headers["Authorization"] = f"Bearer {auth_key}"
@@ -666,6 +856,36 @@ async def execute_local_harness(
             try:
                 resp_json = json.loads(raw_resp)
                 if isinstance(resp_json, dict):
+                    # 如果 DSH 返回 ok: false 错误
+                    if resp_json.get("ok") is False:
+                        err_detail = resp_json.get("error", resp_json)
+                        err_str = json.dumps(err_detail, ensure_ascii=False)
+                        last_err = err_str
+
+                        # 如果是 session-not-found 错误，自动在本地 DSH 创建新会话并立即重试
+                        if "session-not-found" in err_str or "not found" in err_str:
+                            await on_step_callback(f"🔄 检测到原会话不存在，正在自动在工作区 [{target_workspace}] 重建新会话...")
+                            ok_create, new_sid, _ = await create_dsh_session_explicit(
+                                harness_url, workspace=target_workspace, title=f"自愈会话_{task_id[:6]}", model=model_name
+                            )
+                            if ok_create and new_sid:
+                                active_session_id = new_sid
+                                steer_p, _ = build_rpc_payloads(active_session_id)
+                                retry_data = json.dumps(steer_p).encode("utf-8")
+                                retry_resp_raw = await loop.run_in_executor(None, lambda: do_request(url=target_url, data=retry_data))
+                                try:
+                                    retry_json = json.loads(retry_resp_raw)
+                                    if retry_json.get("ok") is not False:
+                                        resp_json = retry_json
+                                    else:
+                                        continue
+                                except Exception:
+                                    output_content = retry_resp_raw
+                                    success_endpoint_name = ep_name
+                                    break
+                            else:
+                                continue
+
                     # 1. OpenAI 格式 choices[0].message.content
                     if "choices" in resp_json and len(resp_json["choices"]) > 0:
                         output_content = resp_json["choices"][0].get("message", {}).get("content", "")
@@ -691,7 +911,6 @@ async def execute_local_harness(
             break
 
         except urllib.error.HTTPError as he:
-            # 遇到 405 (Method Not Allowed) 或 404 (Not Found)，自动无缝尝试下一个候选端点
             last_err = f"HTTP {he.code} ({he.reason})"
             continue
         except urllib.error.URLError as ue:
@@ -707,11 +926,11 @@ async def execute_local_harness(
 
     # 如果所有候选端点均未能成功响应
     error_tip = (
-        f"❌ 连接本地 DeepSeek Harness / Agent 服务失败 ({harness_base})。\n"
-        f"   最近一次尝试报错: {last_err}\n"
-        f"   💡 排查指南:\n"
-        f"   1. 请确认本地 3080 端口已正常开启 (http://127.0.0.1:3080)；\n"
-        f"   2. 若使用其他端口，可在启动命令加上 `--harness-url \"http://127.0.0.1:端口\"`。"
+        "❌ 连接本地 DeepSeek Harness / Agent 服务失败 (" + str(harness_base) + ")。\n"
+        "   最近一次尝试报错: " + str(last_err) + "\n"
+        "   💡 排查指南:\n"
+        "   1. 请确认本地 3080 端口已正常开启 (http://127.0.0.1:3080)；\n"
+        "   2. 若使用其他端口，可在启动命令加上 --harness-url http://127.0.0.1:端口。"
     )
     await on_step_callback(f"❌ 本地服务连接失败: {last_err or '所有端点均不可达'}")
     return False, error_tip
@@ -730,8 +949,9 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
     semaphore = asyncio.Semaphore(concurrency_limit)
     loop = asyncio.get_running_loop()
 
-    # 1. 发送注册信息
+    # 1. 发送注册信息并自动探测同步本地会话列表
     try:
+        init_workspaces, init_sessions = await query_dsh_workspaces_and_sessions(args.harness_url)
         reg_res = await loop.run_in_executor(
             None,
             lambda: http_post_json(register_url, {
@@ -748,7 +968,19 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
                 }
             })
         )
-        print(f"\033[92m[✓ 注册成功] 已通过 HTTP 调度网关认证！Token: {token}\033[0m")
+        # 同步会话列表至服务端
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: http_post_json(f"{server_base}/api/agent/sync-sessions", {
+                    "token": token,
+                    "workspaces": init_workspaces,
+                    "sessions": init_sessions
+                }, timeout=5)
+            )
+        except Exception:
+            pass
+        print(f"\033[92m[✓ 注册成功] 已通过 HTTP 调度网关认证！发现 {len(init_sessions)} 个本地会话。Token: {token}\033[0m")
     except Exception as e:
         print(f"\033[93m[注册告警] 首次注册响应: {e}，将直接进入长轮询调度...\033[0m")
 
@@ -773,9 +1005,10 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
         messages = task_data.get("messages", [])
         harness_url = task_data.get("harnessUrl", args.harness_url)
         model_name = task_data.get("model", args.harness_model)
-        session_id = task_data.get("sessionId", "default_session")
+        session_id = task_data.get("agentSessionId") or task_data.get("sessionId", "default_session")
+        target_ws = task_data.get("agentWorkspace") or task_data.get("workspace") or "deepseek-agent"
 
-        print(f"\n\033[94m[收到任务] TaskID: {task_id} | 提示词: {prompt[:40]}...\033[0m")
+        print(f"\n\033[94m[收到任务] TaskID: {task_id} | 工作区: {target_ws} | 提示词: {prompt[:40]}...\033[0m")
         steps_collected = []
 
         async def on_step(step_text: str):
@@ -801,7 +1034,7 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
 
         async with semaphore:
             success, output = await execute_local_harness(
-                task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config
+                task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config, target_workspace=target_ws
             )
 
         status_tag = "✓ 任务完成" if success else "✗ 任务异常"
@@ -822,6 +1055,20 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
             )
         except Exception as e:
             logger.error(f"回传任务结果失败: {e}")
+
+        # 任务执行后主动刷新一次最新会话列表并同步
+        try:
+            cur_ws, cur_sess = await query_dsh_workspaces_and_sessions(harness_url)
+            await loop.run_in_executor(
+                None,
+                lambda: http_post_json(f"{server_base}/api/agent/sync-sessions", {
+                    "token": token,
+                    "workspaces": cur_ws,
+                    "sessions": cur_sess
+                }, timeout=5)
+            )
+        except Exception:
+            pass
 
     # 3. 轮询主循环
     poll_fail_count = 0
@@ -919,6 +1166,19 @@ async def run_bridge_client(args):
                     }
                 }))
 
+                # 探测本地会话列表并即时同步
+                try:
+                    init_ws, init_sess = await query_dsh_workspaces_and_sessions(args.harness_url)
+                    await ws.send(json.dumps({
+                        "type": "sync_sessions",
+                        "token": token,
+                        "workspaces": init_ws,
+                        "sessions": init_sess
+                    }))
+                    print(f"\033[92m[✓ 会话同步] 已向 App 同步本地 {len(init_sess)} 个 DSH 会话\033[0m")
+                except Exception as sync_e:
+                    logger.warning(f"首次同步会话告警: {sync_e}")
+
                 async for raw_msg in ws:
                     try:
                         msg = json.loads(raw_msg)
@@ -936,6 +1196,41 @@ async def run_bridge_client(args):
                             print("\033[91m[权限注销] 当前配对 Token 已在 App 端被重置或注销。桥接程序已停止。\033[0m")
                             return
 
+                        if mtype == "get_sessions":
+                            target_h_url = msg.get("harnessUrl", args.harness_url)
+                            cur_workspaces, cur_sessions = await query_dsh_workspaces_and_sessions(target_h_url)
+                            await ws.send(json.dumps({
+                                "type": "sessions_result",
+                                "token": token,
+                                "workspaces": cur_workspaces,
+                                "sessions": cur_sessions
+                            }))
+                            continue
+
+                        if mtype == "create_session":
+                            create_task_id = msg.get("taskId")
+                            target_h_url = msg.get("harnessUrl", args.harness_url)
+                            target_workspace = msg.get("workspace", "deepseek-agent")
+                            title_text = msg.get("title")
+                            model_text = msg.get("model", args.harness_model)
+
+                            ok_create, new_sid, session_obj = await create_dsh_session_explicit(
+                                target_h_url, workspace=target_workspace, title=title_text, model=model_text
+                            )
+                            cur_workspaces, cur_sessions = await query_dsh_workspaces_and_sessions(target_h_url)
+
+                            await ws.send(json.dumps({
+                                "type": "create_session_result",
+                                "taskId": create_task_id,
+                                "token": token,
+                                "success": ok_create,
+                                "sessionId": new_sid,
+                                "session": session_obj,
+                                "workspaces": cur_workspaces,
+                                "sessions": cur_sessions
+                            }))
+                            continue
+
                         if mtype == "run_agent":
                             # 处理派发任务
                             task_id = msg.get("taskId")
@@ -943,9 +1238,10 @@ async def run_bridge_client(args):
                             messages = msg.get("messages", [])
                             harness_url = msg.get("harnessUrl", args.harness_url)
                             model_name = msg.get("model", args.harness_model)
-                            session_id = msg.get("sessionId", "default_session")
+                            session_id = msg.get("agentSessionId") or msg.get("sessionId", "default_session")
+                            target_ws = msg.get("agentWorkspace") or msg.get("workspace") or "deepseek-agent"
 
-                            print(f"\n\033[94m[收到任务] TaskID: {task_id} | 提示词: {prompt[:40]}...\033[0m")
+                            print(f"\n\033[94m[收到任务] TaskID: {task_id} | 工作区: {target_ws} | 提示词: {prompt[:40]}...\033[0m")
                             steps_collected = []
 
                             async def ws_step_cb(step_text: str):
@@ -968,7 +1264,7 @@ async def run_bridge_client(args):
                             }
 
                             success, output = await execute_local_harness(
-                                task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config
+                                task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config, target_workspace=target_ws
                             )
 
                             status_tag = "✓ 任务完成" if success else "✗ 任务异常"
@@ -983,6 +1279,18 @@ async def run_bridge_client(args):
                                 "output": output,
                                 "timestamp": int(time.time() * 1000)
                             }))
+
+                            # 任务后同步最新会话状态
+                            try:
+                                cur_ws, cur_sess = await query_dsh_workspaces_and_sessions(harness_url)
+                                await ws.send(json.dumps({
+                                    "type": "sync_sessions",
+                                    "token": token,
+                                    "workspaces": cur_ws,
+                                    "sessions": cur_sess
+                                }))
+                            except Exception:
+                                pass
 
                     except Exception as handler_err:
                         logger.error(f"消息处理异常: {handler_err}")

@@ -16,8 +16,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AppSettings } from '../../types';
 import { API_BASE_URL } from '../../config';
-import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2, HardDrive, FolderOpen, RotateCcw, RefreshCw, Check, Type, Bot, Download, Key, Cpu, Dices, CheckCircle2, AlertTriangle, QrCode, Smartphone } from 'lucide-react';
+import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2, HardDrive, FolderOpen, RotateCcw, RefreshCw, Check, Type, Bot, Download, Key, Cpu, Dices, CheckCircle2, AlertTriangle, QrCode, Smartphone, FolderKanban, Plus, MessageSquare } from 'lucide-react';
 import QRCode from 'qrcode';
+import socket from '../../lib/socket';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { CapacitorHttp } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
@@ -79,6 +80,14 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [copiedFullCode, setCopiedFullCode] = React.useState(false);
   const [isRevokingToken, setIsRevokingToken] = React.useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = React.useState<string>('');
+  
+  // DSH Workspaces & Sessions State
+  const [agentWorkspaces, setAgentWorkspaces] = React.useState<string[]>(['deepseek-agent']);
+  const [agentSessions, setAgentSessions] = React.useState<Array<{ id: string; sessionId?: string; title: string; workspace?: string; updatedAt?: string | number }>>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = React.useState(false);
+  const [isCreatingSession, setIsCreatingSession] = React.useState(false);
+  const [showNewSessionInput, setShowNewSessionInput] = React.useState(false);
+  const [newSessionTitle, setNewSessionTitle] = React.useState('');
 
   const normalizeSettings = React.useCallback((raw: AppSettings): AppSettings => {
     let validOpacity = raw.backgroundOpacity;
@@ -97,6 +106,8 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
       asrApiKey: raw.asrApiKey?.trim() || '',
       agentToken: (raw.agentToken || '').trim() || 'default_agent_token',
       agentHarnessUrl: (raw.agentHarnessUrl || '').trim() || 'http://127.0.0.1:3080',
+      agentSessionId: raw.agentSessionId?.trim() || '',
+      agentWorkspace: (raw.agentWorkspace || '').trim() || 'deepseek-agent',
       backgroundOpacity: validOpacity
     };
   }, []);
@@ -206,6 +217,7 @@ import time
 import urllib.request
 import urllib.error
 import urllib.parse
+import uuid
 
 # 强制标准输出为 UTF-8 编码并激活 Windows 控制台 ANSI 颜色与高对比度字符支持
 if sys.platform == "win32":
@@ -751,14 +763,53 @@ async def execute_local_harness(
 
     await on_step_callback(f"🚀 [1/3] 已接收到任务，正在调用本地 DeepSeek Harness Agent ({model_name})...")
 
+    # 构造 content 数组 (支持 messages 与 prompt 兼容)
+    content_list = []
+    if messages and isinstance(messages, list):
+        for msg in messages:
+            if isinstance(msg, dict):
+                text_val = msg.get("content", "")
+                if text_val:
+                    content_list.append({"type": "text", "text": str(text_val)})
+            elif isinstance(msg, str) and msg:
+                content_list.append({"type": "text", "text": str(msg)})
+    
+    if not content_list:
+        content_list = [{"type": "text", "text": str(prompt or "")}]
+
+    # 构造标准 DSH RPC 请求体 (steer 模式与 queue 模式)
+    rpc_id_steer = f"rpc_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+    rpc_id_queue = f"rpc_{int(time.time() * 1000) + 1}_{uuid.uuid4().hex[:6]}"
+    session_key = session_id or f"session_{task_id}"
+
+    dsh_rpc_payload_steer = {
+        "type": "client-request",
+        "rpcId": rpc_id_steer,
+        "method": "session.prompt",
+        "payload": {
+            "sessionId": session_key,
+            "mode": "steer",
+            "content": content_list,
+            "model": model_name or "deepseek-chat"
+        }
+    }
+
+    dsh_rpc_payload_queue = {
+        "type": "client-request",
+        "rpcId": rpc_id_queue,
+        "method": "session.prompt",
+        "payload": {
+            "sessionId": session_key,
+            "mode": "queue",
+            "content": content_list,
+            "model": model_name or "deepseek-chat"
+        }
+    }
+
     candidate_endpoints = []
     if harness_base.endswith("/session.prompt") or harness_base.endswith("/session/prompt"):
-        candidate_endpoints.append((harness_base, {
-            "prompt": prompt,
-            "sessionId": session_id or f"session_{task_id}",
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}]
-        }, "DSH Session 接口"))
+        candidate_endpoints.append((harness_base, dsh_rpc_payload_steer, "DSH RPC 原生接口 (steer 模式)"))
+        candidate_endpoints.append((harness_base, dsh_rpc_payload_queue, "DSH RPC 原生接口 (queue 降级)"))
     elif harness_base.endswith("/v1") or harness_base.endswith("/chat/completions"):
         endpoint_url = harness_base if harness_base.endswith("/chat/completions") else f"{harness_base}/chat/completions"
         candidate_endpoints.append((endpoint_url, {
@@ -768,17 +819,10 @@ async def execute_local_harness(
             "temperature": 0.7
         }, "OpenAI 兼容接口"))
     else:
-        candidate_endpoints.append((f"{harness_base}/session.prompt", {
-            "prompt": prompt,
-            "sessionId": session_id or f"session_{task_id}",
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}]
-        }, "DSH Local Build 原生接口 (/session.prompt)"))
-        candidate_endpoints.append((f"{harness_base}/api/session.prompt", {
-            "prompt": prompt,
-            "sessionId": session_id or f"session_{task_id}",
-            "model": model_name or "deepseek-chat"
-        }, "DSH API 接口 (/api/session.prompt)"))
+        candidate_endpoints.append((f"{harness_base}/session.prompt", dsh_rpc_payload_steer, "DSH 原生 RPC 接口 (/session.prompt, steer)"))
+        candidate_endpoints.append((f"{harness_base}/session.prompt", dsh_rpc_payload_queue, "DSH 原生 RPC 接口 (/session.prompt, queue)"))
+        candidate_endpoints.append((f"{harness_base}/api/session.prompt", dsh_rpc_payload_steer, "DSH API RPC 接口 (/api/session.prompt, steer)"))
+        candidate_endpoints.append((f"{harness_base}/api/session.prompt", dsh_rpc_payload_queue, "DSH API RPC 接口 (/api/session.prompt, queue)"))
         candidate_endpoints.append((f"{harness_base}/v1/chat/completions", {
             "model": model_name or "deepseek-chat",
             "messages": messages if messages else [{"role": "user", "content": prompt}],
@@ -820,6 +864,9 @@ async def execute_local_harness(
             try:
                 resp_json = json.loads(raw_resp)
                 if isinstance(resp_json, dict):
+                    if resp_json.get("ok") is False:
+                        last_err = json.dumps(resp_json.get("error", resp_json), ensure_ascii=False)
+                        continue
                     if "choices" in resp_json and len(resp_json["choices"]) > 0:
                         output_content = resp_json["choices"][0].get("message", {}).get("content", "")
                     elif "result" in resp_json:
@@ -856,11 +903,11 @@ async def execute_local_harness(
         return True, str(output_content)
 
     error_tip = (
-        f"❌ 连接本地 DeepSeek Harness / Agent 服务失败 ({harness_base})。\\n"
-        f"   最近一次尝试报错: {last_err}\\n"
-        f"   💡 排查指南:\\n"
-        f"   1. 请确认本地 3080 端口已正常开启 (http://127.0.0.1:3080)；\\n"
-        f"   2. 若使用其他端口，可在启动命令加上 --harness-url \"http://127.0.0.1:端口\"。"
+        "❌ 连接本地 DeepSeek Harness / Agent 服务失败 (" + str(harness_base) + ")。\\n"
+        "   最近一次尝试报错: " + str(last_err) + "\\n"
+        "   💡 排查指南:\\n"
+        "   1. 请确认本地 3080 端口已正常开启 (http://127.0.0.1:3080)；\\n"
+        "   2. 若使用其他端口，可在启动命令加上 --harness-url http://127.0.0.1:端口。"
     )
     await on_step_callback(f"❌ 本地服务连接失败: {last_err or '所有端点均不可达'}")
     return False, error_tip
@@ -1155,7 +1202,25 @@ if __name__ == "__main__":
 `;
   }, [localSettings.agentToken, localSettings.agentHarnessUrl]);
 
-  const handleDownloadBridgePy = React.useCallback(() => {
+  const handleDownloadBridgePy = React.useCallback(async () => {
+    try {
+      const res = await fetch('/deepseek_bridge.py');
+      if (res.ok) {
+        const text = await res.text();
+        const blob = new Blob([text], { type: 'text/x-python;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'deepseek_bridge.py';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+      }
+    } catch (e) {
+      // fallback to generated
+    }
     const content = generateBridgeScriptContent();
     const blob = new Blob([content], { type: 'text/x-python;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -1259,11 +1324,87 @@ if %errorlevel% neq 0 (
       const res = await fetch(`${API_BASE_URL}/api/agent/status?token=${encodeURIComponent(token)}`);
       const data = await res.json();
       setAgentOnlineStatus(data);
+      if (data.workspaces && Array.isArray(data.workspaces) && data.workspaces.length > 0) {
+        setAgentWorkspaces(data.workspaces);
+      }
+      if (data.sessions && Array.isArray(data.sessions) && data.sessions.length > 0) {
+        setAgentSessions(data.sessions);
+      }
     } catch (e) {
       setAgentOnlineStatus({ online: false });
     } finally {
       setIsCheckingAgent(false);
     }
+  }, []);
+
+  const fetchAgentSessions = React.useCallback(async (tokenToTest?: string) => {
+    const token = (tokenToTest || localSettingsRef.current.agentToken || 'default_agent_token').trim();
+    setIsLoadingSessions(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/agent/sessions?token=${encodeURIComponent(token)}`);
+      const data = await res.json();
+      if (data.workspaces && Array.isArray(data.workspaces)) {
+        setAgentWorkspaces(data.workspaces);
+      }
+      if (data.sessions && Array.isArray(data.sessions)) {
+        setAgentSessions(data.sessions);
+      }
+    } catch (e) {
+      console.warn('获取本地 Agent 会话列表失败:', e);
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, []);
+
+  const handleCreateSession = React.useCallback(async (customTitle?: string) => {
+    const token = (localSettingsRef.current.agentToken || 'default_agent_token').trim();
+    const ws = localSettingsRef.current.agentWorkspace || 'deepseek-agent';
+    const title = (customTitle || '').trim() || `新对话 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+    
+    setIsCreatingSession(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/agent/create-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          workspace: ws,
+          title,
+          model: localSettingsRef.current.modelName || 'deepseek-chat'
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.sessionId) {
+        updateAndSave({
+          agentSessionId: data.sessionId,
+          agentWorkspace: ws
+        });
+        if (data.sessions) setAgentSessions(data.sessions);
+        if (data.workspaces) setAgentWorkspaces(data.workspaces);
+        setShowNewSessionInput(false);
+        setNewSessionTitle('');
+      } else {
+        alert(data.error || '创建本地会话失败，请确认桥接程序已启动并连通 DSH');
+      }
+    } catch (e: any) {
+      alert(`创建本地会话失败: ${e.message || e}`);
+    } finally {
+      setIsCreatingSession(false);
+    }
+  }, [updateAndSave]);
+
+  React.useEffect(() => {
+    const handleSessionsUpdated = (data: any) => {
+      const token = (localSettingsRef.current.agentToken || 'default_agent_token').trim();
+      if (data && (!data.token || data.token === token)) {
+        if (data.workspaces && Array.isArray(data.workspaces)) setAgentWorkspaces(data.workspaces);
+        if (data.sessions && Array.isArray(data.sessions)) setAgentSessions(data.sessions);
+      }
+    };
+    socket.on('agent_sessions_updated', handleSessionsUpdated);
+    return () => {
+      socket.off('agent_sessions_updated', handleSessionsUpdated);
+    };
   }, []);
 
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.isElectron;
@@ -1283,12 +1424,13 @@ if %errorlevel% neq 0 (
     if (open) {
       loadStorageInfo();
       checkAgentStatus();
+      fetchAgentSessions();
       const interval = setInterval(() => {
         checkAgentStatus();
       }, 2500);
       return () => clearInterval(interval);
     }
-  }, [open, loadStorageInfo, checkAgentStatus]);
+  }, [open, loadStorageInfo, checkAgentStatus, fetchAgentSessions]);
 
   const handleSelectStoragePath = async () => {
     if (!window.electronAPI?.selectStoragePath) return;
@@ -2408,6 +2550,140 @@ if %errorlevel% neq 0 (
                   <span className="text-[10px] text-muted-foreground mt-1 block">
                     默认: <code>127.0.0.1:3080</code> (协议头 <code>http://</code> 已在后台自动注入)
                   </span>
+                </div>
+              </div>
+
+              {/* 本地工作区与会话选择卡片 */}
+              <div className="p-3 bg-primary/5 rounded-xl border border-primary/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-primary flex items-center gap-1.5">
+                    <FolderKanban className="w-3.5 h-3.5" />
+                    本地工作区与对话列表 (DeepSeek Harness)
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => fetchAgentSessions()}
+                      disabled={isLoadingSessions}
+                      className="h-6 px-2 text-[10px] flex items-center gap-1 shrink-0"
+                      title="从本地 DSH 刷新工作区和会话列表"
+                    >
+                      <RefreshCw className={cn("w-3 h-3", isLoadingSessions && "animate-spin text-primary")} />
+                      刷新列表
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={() => setShowNewSessionInput(!showNewSessionInput)}
+                      className="h-6 px-2 text-[10px] flex items-center gap-1 bg-primary text-primary-foreground shrink-0 shadow-xs"
+                      title="在本地 DSH 立即创建一个全新对话"
+                    >
+                      <Plus className="w-3 h-3" />
+                      新建本地会话
+                    </Button>
+                  </div>
+                </div>
+
+                {/* 工作区选择 */}
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="agentWorkspace" className="text-right text-xs">目标工作区</Label>
+                  <div className="col-span-3 flex items-center gap-2">
+                    <Input
+                      id="agentWorkspace"
+                      name="agentWorkspace"
+                      value={localSettings.agentWorkspace || 'deepseek-agent'}
+                      onChange={(e) => updateAndSave({ agentWorkspace: e.target.value })}
+                      placeholder="deepseek-agent"
+                      className="h-8 text-xs font-mono flex-1"
+                    />
+                    {agentWorkspaces && agentWorkspaces.length > 1 && (
+                      <select
+                        value={localSettings.agentWorkspace || 'deepseek-agent'}
+                        onChange={(e) => updateAndSave({ agentWorkspace: e.target.value })}
+                        className="h-8 text-xs bg-background border border-input rounded-md px-2 text-foreground"
+                      >
+                        {agentWorkspaces.map(ws => (
+                          <option key={ws} value={ws}>{ws}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+
+                {/* 会话选择 */}
+                <div className="grid grid-cols-4 items-start gap-4">
+                  <Label htmlFor="agentSessionId" className="text-right text-xs pt-2">目标会话</Label>
+                  <div className="col-span-3 space-y-1.5">
+                    <select
+                      id="agentSessionId"
+                      value={localSettings.agentSessionId || ''}
+                      onChange={(e) => updateAndSave({ agentSessionId: e.target.value })}
+                      className="w-full h-8 text-xs bg-background border border-input rounded-md px-2 text-foreground font-medium truncate"
+                    >
+                      <option value="">✨ 智能选择 / 自动新建会话 (推荐)</option>
+                      {agentSessions.map((s) => {
+                        const sid = s.sessionId || s.id;
+                        return (
+                          <option key={sid} value={sid}>
+                            [{s.workspace || 'deepseek-agent'}] {s.title || '未命名对话'} ({sid?.substring(0, 8)}...)
+                          </option>
+                        );
+                      })}
+                    </select>
+
+                    {showNewSessionInput && (
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <Input
+                          value={newSessionTitle}
+                          onChange={(e) => setNewSessionTitle(e.target.value)}
+                          placeholder="输入新会话标题 (如: 文档档案处理)"
+                          className="h-7 text-xs flex-1"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleCreateSession(newSessionTitle);
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={isCreatingSession}
+                          onClick={() => handleCreateSession(newSessionTitle)}
+                          className="h-7 px-2 text-xs shrink-0"
+                        >
+                          {isCreatingSession ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Check className="w-3 h-3 mr-1" />}
+                          确认创建
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setShowNewSessionInput(false)}
+                          className="h-7 px-1.5 text-xs text-muted-foreground shrink-0"
+                        >
+                          取消
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="text-[10px] text-muted-foreground leading-relaxed flex items-center justify-between">
+                      <span className="truncate">
+                        {localSettings.agentSessionId
+                          ? `已锁定会话: ${localSettings.agentSessionId.substring(0, 14)}...`
+                          : '自动模式：未指定或会话不存在时，将自动在目标工作区创建新会话并自动绑定。'}
+                      </span>
+                      {localSettings.agentSessionId && (
+                        <button
+                          type="button"
+                          onClick={() => updateAndSave({ agentSessionId: '' })}
+                          className="text-primary hover:underline ml-2 shrink-0 font-medium"
+                        >
+                          重置为自动
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
 

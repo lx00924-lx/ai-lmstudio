@@ -65,6 +65,9 @@ export interface AppSettings {
   agentMode?: boolean;
   agentToken?: string;
   agentHarnessUrl?: string;
+  agentSessionId?: string;
+  agentWorkspace?: string;
+  agentAutoCreateSession?: boolean;
 }
 
 export interface ChatState {
