@@ -536,13 +536,25 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
         "payload": {}
     }
 
+    rpc_workspace_payload = {
+        "type": "client-request",
+        "rpcId": f"rpc_ws_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+        "mode": "steer",
+        "method": "workspace.list",
+        "payload": {}
+    }
+
     endpoints = [
         (f"{harness_base}/v1/agent", "POST", rpc_list_payload),
         (f"{harness_base}/agent", "POST", rpc_list_payload),
+        (f"{harness_base}/api/sessions", "GET", None),
+        (f"{harness_base}/sessions", "GET", None),
+        (f"{harness_base}/v1/sessions", "GET", None),
+        (f"{harness_base}/api/workspace.list", "POST", rpc_workspace_payload),
+        (f"{harness_base}/v1/agent", "POST", rpc_workspace_payload),
         (f"{harness_base}/session.list", "POST", rpc_list_payload),
         (f"{harness_base}/api/session.list", "POST", rpc_list_payload),
         (f"{harness_base}/session/list", "POST", rpc_list_payload),
-        (f"{harness_base}/v1/sessions", "GET", None),
         (f"{harness_base}/api/v1/agent", "POST", rpc_list_payload)
     ]
 

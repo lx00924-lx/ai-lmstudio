@@ -1328,18 +1328,38 @@ if %errorlevel% neq 0 (
   });
 
   // Get agent workspaces and active session list
-  app.get("/api/agent/sessions", (req, res) => {
+  app.get("/api/agent/sessions", async (req, res) => {
     try {
       const token = ((req.query.token as string) || "").trim() || "default_agent_token";
       const agent = connectedAgents.get(token);
       const isOnline = agent && (
         (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) ||
-        (Date.now() - agent.lastPing < 45000)
+        (Date.now() - agent.lastPing < 60000)
       );
 
       if (agent && agent.ws && agent.ws.readyState === WSWebSocket.OPEN) {
         try {
-          agent.ws.send(JSON.stringify({ type: "get_sessions" }));
+          const reqId = `sess_req_${Date.now()}`;
+          const p = new Promise<any>((resolve) => {
+            const timer = setTimeout(() => resolve(null), 2500);
+            const l = (raw: any) => {
+              try {
+                const msg = JSON.parse(raw.toString());
+                if (msg.type === "sessions_result") {
+                  clearTimeout(timer);
+                  agent.ws?.off("message", l);
+                  resolve(msg);
+                }
+              } catch {}
+            };
+            agent.ws?.on("message", l);
+          });
+          agent.ws.send(JSON.stringify({ type: "get_sessions", reqId }));
+          const result = await p;
+          if (result) {
+            if (result.workspaces && Array.isArray(result.workspaces)) agent.workspaces = result.workspaces;
+            if (result.sessions && Array.isArray(result.sessions)) agent.sessions = result.sessions;
+          }
         } catch {}
       }
 
