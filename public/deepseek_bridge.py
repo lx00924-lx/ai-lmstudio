@@ -942,15 +942,20 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
                 pass
 
         extra_config = {
-            "apiEndpoint": task_data.get("apiEndpoint") or args.chat_api_url,
-            "apiKey": task_data.get("apiKey") or args.chat_api_key,
-            "chatModel": task_data.get("chatModel") or args.chat_model,
+            "apiEndpoint": task_data.get("apiEndpoint") or getattr(args, "chat_api_url", ""),
+            "apiKey": task_data.get("apiKey") or getattr(args, "chat_api_key", ""),
+            "chatModel": task_data.get("chatModel") or getattr(args, "chat_model", ""),
         }
 
-        async with semaphore:
-            success, output = await execute_local_harness(
-                task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config, target_workspace=target_ws
-            )
+        try:
+            async with semaphore:
+                success, output = await execute_local_harness(
+                    task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config, target_workspace=target_ws
+                )
+        except Exception as task_err:
+            success = False
+            output = f"本地执行异常: {task_err}"
+            await on_step(f"❌ 任务发生未捕获异常: {task_err}")
 
         status_tag = "✓ 任务完成" if success else "✗ 任务异常"
         color = "\033[92m" if success else "\033[91m"
@@ -1148,14 +1153,19 @@ async def run_bridge_client(args):
                                     pass
 
                             extra_config = {
-                                "apiEndpoint": msg.get("apiEndpoint") or args.chat_api_url,
-                                "apiKey": msg.get("apiKey") or args.chat_api_key,
-                                "chatModel": msg.get("chatModel") or args.chat_model,
+                                "apiEndpoint": msg.get("apiEndpoint") or getattr(args, "chat_api_url", ""),
+                                "apiKey": msg.get("apiKey") or getattr(args, "chat_api_key", ""),
+                                "chatModel": msg.get("chatModel") or getattr(args, "chat_model", ""),
                             }
 
-                            success, output = await execute_local_harness(
-                                task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config, target_workspace=target_ws
-                            )
+                            try:
+                                success, output = await execute_local_harness(
+                                    task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config, target_workspace=target_ws
+                                )
+                            except Exception as task_err:
+                                success = False
+                                output = f"本地执行异常: {task_err}"
+                                await ws_step_cb(f"❌ 任务发生未捕获异常: {task_err}")
 
                             status_tag = "✓ 任务完成" if success else "✗ 任务异常"
                             color = "\033[92m" if success else "\033[91m"

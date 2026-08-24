@@ -302,11 +302,14 @@ def is_host_safe(url: str) -> bool:
         return False
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.5")
+    parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.6")
     parser.add_argument("--token", type=str, default=os.getenv("AGENT_TOKEN", ""), help="App 中生成的配对 Token")
     parser.add_argument("--server", type=str, default=os.getenv("SERVER_URL", "${serverUrl}"), help="App 调度服务器地址 (默认: ${serverUrl})")
     parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "${harnessUrl}"), help="本地 DeepSeek Harness 服务地址 (默认: ${harnessUrl})")
     parser.add_argument("--harness-model", type=str, default=os.getenv("HARNESS_MODEL", "deepseek-chat"), help="本地 DeepSeek 模型名称 (默认: deepseek-chat)")
+    parser.add_argument("--chat-api-url", type=str, default=os.getenv("CHAT_API_URL", ""), help="可选：独立云端聊天推理接口 (如火山方舟)")
+    parser.add_argument("--chat-api-key", type=str, default=os.getenv("CHAT_API_KEY", ""), help="可选：云端聊天 API Key")
+    parser.add_argument("--chat-model", type=str, default=os.getenv("CHAT_MODEL", ""), help="可选：云端聊天模型名称")
     parser.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_TASKS, help="最大本地并发任务数 (默认 2)")
     parser.add_argument("--transport", type=str, default="auto", choices=["auto", "polling", "ws"], help="传输通信协议 (auto / polling / ws)")
     parser.add_argument("--no-proxy", action="store_true", help="强制 Direct 直连，忽略系统所有代理与 Clash 残留")
@@ -1146,15 +1149,20 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
                 pass
 
         extra_config = {
-            "apiEndpoint": task_data.get("apiEndpoint") or args.chat_api_url,
-            "apiKey": task_data.get("apiKey") or args.chat_api_key,
-            "chatModel": task_data.get("chatModel") or args.chat_model,
+            "apiEndpoint": task_data.get("apiEndpoint") or getattr(args, "chat_api_url", ""),
+            "apiKey": task_data.get("apiKey") or getattr(args, "chat_api_key", ""),
+            "chatModel": task_data.get("chatModel") or getattr(args, "chat_model", ""),
         }
 
-        async with semaphore:
-            success, output = await execute_local_harness(
-                task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config, target_workspace=target_ws
-            )
+        try:
+            async with semaphore:
+                success, output = await execute_local_harness(
+                    task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config, target_workspace=target_ws
+                )
+        except Exception as task_err:
+            success = False
+            output = f"本地执行异常: {task_err}"
+            await on_step(f"❌ 任务发生未捕获异常: {task_err}")
 
         status_tag = "✓ 任务完成" if success else "✗ 任务异常"
         color = "\\033[92m" if success else "\\033[91m"
@@ -1352,14 +1360,19 @@ async def run_bridge_client(args):
                                     pass
 
                             extra_config = {
-                                "apiEndpoint": msg.get("apiEndpoint") or args.chat_api_url,
-                                "apiKey": msg.get("apiKey") or args.chat_api_key,
-                                "chatModel": msg.get("chatModel") or args.chat_model,
+                                "apiEndpoint": msg.get("apiEndpoint") or getattr(args, "chat_api_url", ""),
+                                "apiKey": msg.get("apiKey") or getattr(args, "chat_api_key", ""),
+                                "chatModel": msg.get("chatModel") or getattr(args, "chat_model", ""),
                             }
 
-                            success, output = await execute_local_harness(
-                                task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config, target_workspace=target_ws
-                            )
+                            try:
+                                success, output = await execute_local_harness(
+                                    task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config, target_workspace=target_ws
+                                )
+                            except Exception as task_err:
+                                success = False
+                                output = f"本地执行异常: {task_err}"
+                                await ws_step_cb(f"❌ 任务发生未捕获异常: {task_err}")
 
                             status_tag = "✓ 任务完成" if success else "✗ 任务异常"
                             color = "\\033[92m" if success else "\\033[91m"
