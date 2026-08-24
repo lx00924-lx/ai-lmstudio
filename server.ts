@@ -1537,11 +1537,21 @@ if %errorlevel% neq 0 (
 
   app.get("/api/agent/download-bridge", async (req, res) => {
     try {
-      const scriptPath = path.join(process.cwd(), "deepseek_bridge.py");
       let scriptContent = "";
-      try {
-        scriptContent = await fs.readFile(scriptPath, "utf-8");
-      } catch {
+      const candidates = [
+        path.join(process.cwd(), "public", "deepseek_bridge.py"),
+        path.join(process.cwd(), "deepseek_bridge.py")
+      ];
+      for (const p of candidates) {
+        try {
+          const c = await fs.readFile(p, "utf-8");
+          if (c && c.length > 500) {
+            scriptContent = c;
+            break;
+          }
+        } catch {}
+      }
+      if (!scriptContent) {
         scriptContent = `# DeepSeek Bridge Script`;
       }
       res.setHeader("Content-Type", "text/x-python; charset=utf-8");

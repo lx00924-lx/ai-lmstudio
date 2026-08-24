@@ -1533,7 +1533,27 @@ if __name__ == "__main__":
     }
   }, []);
 
-  const handleDownloadBridgePy = React.useCallback(() => {
+  const handleDownloadBridgePy = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/agent/download-bridge');
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.length > 500) {
+          triggerDirectFileDownload('deepseek_bridge.py', text, 'text/x-python;charset=utf-8');
+          return;
+        }
+      }
+    } catch {}
+    try {
+      const res = await fetch('/deepseek_bridge.py');
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.length > 500) {
+          triggerDirectFileDownload('deepseek_bridge.py', text, 'text/x-python;charset=utf-8');
+          return;
+        }
+      }
+    } catch {}
     const content = generateBridgeScriptContent();
     triggerDirectFileDownload('deepseek_bridge.py', content, 'text/x-python;charset=utf-8');
   }, [generateBridgeScriptContent, triggerDirectFileDownload]);
