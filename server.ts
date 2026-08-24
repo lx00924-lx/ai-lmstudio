@@ -1230,12 +1230,79 @@ async function startServer() {
     try {
       const scriptPath = path.resolve(process.cwd(), "deepseek_bridge.py");
       const content = await fs.readFile(scriptPath, "utf-8");
-      res.setHeader("Content-Type", "text/x-python; charset=utf-8");
+      res.setHeader("Content-Type", "application/octet-stream");
       res.setHeader("Content-Disposition", 'attachment; filename="deepseek_bridge.py"');
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
       res.send(content);
     } catch (err: any) {
       res.status(404).send("File not found");
     }
+  });
+
+  // Dedicated API download route for Python Bridge with attachment headers
+  app.get(["/api/download/deepseek_bridge.py", "/api/download/bridge.py"], async (req, res) => {
+    try {
+      const scriptPath = path.resolve(process.cwd(), "deepseek_bridge.py");
+      const content = await fs.readFile(scriptPath, "utf-8");
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Disposition", 'attachment; filename="deepseek_bridge.py"');
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.send(content);
+    } catch (err: any) {
+      res.status(404).send("File not found");
+    }
+  });
+
+  // Dedicated API download route for Windows 1-Click .bat package
+  app.get(["/api/download/run_bridge.bat", "/api/download/start.bat"], (req, res) => {
+    const token = ((req.query.token as string) || "default_agent_token").trim();
+    const harnessUrl = ((req.query.harnessUrl as string) || "http://127.0.0.1:3080").trim();
+    
+    // Determine host URL
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
+    const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000";
+    const serverUrl = `${protocol}://${host}`;
+
+    const batContent = `@echo off
+chcp 65001 >nul
+title DeepSeek Bridge 本地智能体桥接服务
+echo ======================================================================
+echo    DeepSeek Bridge 一键启动脚本 (会话自动管理增强版)
+echo    服务器地址: ${serverUrl}
+echo    本地 Harness: ${harnessUrl}
+echo ======================================================================
+echo.
+
+where python >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [错误] 未检测到 Python 环境，请先安装 Python 3.8+ 并勾选 Add to PATH！
+    pause
+    exit /b 1
+)
+
+echo [1/3] 正在检查依赖库 (websockets, aiohttp, urllib3)...
+python -m pip install websockets aiohttp urllib3 -q --disable-pip-version-check 2>nul
+
+echo [2/3] 正在同步下载最新的 deepseek_bridge.py 桥接程序...
+python -c "import urllib.request; urllib.request.urlretrieve('${serverUrl}/api/download/deepseek_bridge.py', 'deepseek_bridge.py')" 2>nul
+
+if not exist "deepseek_bridge.py" (
+    echo [警告] 自动下载失败，将尝试使用本地已有的 deepseek_bridge.py...
+)
+
+echo [3/3] 正在启动桥接服务并连接调度中心...
+echo.
+python deepseek_bridge.py --server "${serverUrl}" --token "${token}" --harness-url "${harnessUrl}"
+if %errorlevel% neq 0 (
+    echo.
+    echo 桥接服务异常退出，请检查上方日志。
+    pause
+)
+`;
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Disposition", 'attachment; filename="run_bridge.bat"');
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.send(batContent);
   });
 
   app.get("/api/agent/status", (req, res) => {
