@@ -1406,53 +1406,48 @@ if __name__ == "__main__":
 `;
   }, [localSettings.agentToken, localSettings.agentHarnessUrl]);
 
-  // Mobile-Safe Direct Universal Download Trigger
-  const triggerMobileSafeDownload = React.useCallback((downloadUrl: string, fileName: string, fallbackBlobContent?: string, mimeType: string = 'application/octet-stream') => {
+  // 纯客户端零依赖直接生成并下载文件 (100% 免疫任何 CDN 拦截 / SPA 路由 / 代理导致返回 HTML)
+  const triggerDirectFileDownload = React.useCallback((fileName: string, content: string, mimeType: string = 'text/plain;charset=utf-8') => {
     try {
-      // 1. Prioritize real HTTP URL anchor with download attribute
+      const blob = new Blob([content], { type: mimeType });
+      const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = downloadUrl;
+      a.href = blobUrl;
       a.download = fileName;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         try { document.body.removeChild(a); } catch {}
-      }, 1000);
+        URL.revokeObjectURL(blobUrl);
+      }, 1500);
     } catch (err) {
-      // 2. Fallback to direct navigation
+      console.error('直接下载失败，尝试 DataURI 备选方案:', err);
       try {
-        window.location.href = downloadUrl;
-      } catch (navErr) {
-        // 3. Fallback to Blob URL if available
-        if (fallbackBlobContent) {
-          const blob = new Blob([fallbackBlobContent], { type: mimeType });
-          const blobUrl = URL.createObjectURL(blob);
-          const aBlob = document.createElement('a');
-          aBlob.href = blobUrl;
-          aBlob.download = fileName;
-          document.body.appendChild(aBlob);
-          aBlob.click();
-          setTimeout(() => {
-            try { document.body.removeChild(aBlob); } catch {}
-            URL.revokeObjectURL(blobUrl);
-          }, 1000);
-        }
+        const encodedUri = `data:${mimeType},` + encodeURIComponent(content);
+        const a = document.createElement('a');
+        a.href = encodedUri;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          try { document.body.removeChild(a); } catch {}
+        }, 1500);
+      } catch (dataErr) {
+        console.error('DataURI 下载亦失败:', dataErr);
       }
     }
   }, []);
 
-  const handleDownloadBridgePy = React.useCallback(async () => {
-    const directUrl = `${currentOrigin}/api/download/deepseek_bridge.py`;
+  const handleDownloadBridgePy = React.useCallback(() => {
     const content = generateBridgeScriptContent();
-    triggerMobileSafeDownload(directUrl, 'deepseek_bridge.py', content, 'text/x-python;charset=utf-8');
-  }, [currentOrigin, generateBridgeScriptContent, triggerMobileSafeDownload]);
+    triggerDirectFileDownload('deepseek_bridge.py', content, 'text/x-python;charset=utf-8');
+  }, [generateBridgeScriptContent, triggerDirectFileDownload]);
 
   const handleDownloadStartBat = React.useCallback(() => {
     const token = (localSettings.agentToken || 'default_agent_token').trim();
     const harnessUrl = normalizedHarnessUrl;
-    const directUrl = `${currentOrigin}/api/download/run_bridge.bat?token=${encodeURIComponent(token)}&harnessUrl=${encodeURIComponent(harnessUrl)}`;
     
     const batContent = `@echo off
 chcp 65001 >nul
@@ -1471,13 +1466,10 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [1/3] 正在检查依赖库 (websockets, aiohttp, urllib3)...
+echo [1/2] 正在检查依赖库 (websockets, aiohttp, urllib3)...
 python -m pip install websockets aiohttp urllib3 -q --disable-pip-version-check 2>nul
 
-echo [2/3] 正在同步下载最新的 deepseek_bridge.py 桥接程序...
-python -c "import urllib.request; urllib.request.urlretrieve('${currentOrigin}/api/download/deepseek_bridge.py', 'deepseek_bridge.py')" 2>nul
-
-echo [3/3] 正在启动桥接服务并连接调度中心...
+echo [2/2] 正在启动桥接服务并连接调度中心...
 echo.
 python deepseek_bridge.py --server "${currentOrigin}" --token "${token}" --harness-url "${harnessUrl}"
 if %errorlevel% neq 0 (
@@ -1486,8 +1478,8 @@ if %errorlevel% neq 0 (
     pause
 )
 `;
-    triggerMobileSafeDownload(directUrl, 'run_bridge.bat', batContent, 'application/x-bat;charset=utf-8');
-  }, [localSettings.agentToken, currentOrigin, normalizedHarnessUrl, triggerMobileSafeDownload]);
+    triggerDirectFileDownload('run_bridge.bat', batContent, 'application/x-bat;charset=utf-8');
+  }, [localSettings.agentToken, currentOrigin, normalizedHarnessUrl, triggerDirectFileDownload]);
 
   const handleRevokeAndResetToken = React.useCallback(async () => {
     const oldToken = localSettingsRef.current.agentToken || 'default_agent_token';
