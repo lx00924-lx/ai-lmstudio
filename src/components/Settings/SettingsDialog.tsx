@@ -1083,7 +1083,7 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
                     "harnessUrl": args.harness_url,
                     "model": args.harness_model,
                     "platform": sys.platform,
-                    "pid": os.getpid>,
+                    "pid": os.getpid(),
                     "concurrency": concurrency_limit,
                     "mode": "polling"
                 }
