@@ -521,10 +521,46 @@ def http_get_json(url: str, timeout: int = 35) -> dict:
 
 LOCAL_SESSION_CACHE = []
 
+def is_html_content(content: str) -> bool:
+    if not content or not isinstance(content, str):
+        return False
+    c = content.strip().lower()
+    return (
+        c.startswith("<!doctype") or
+        c.startswith("<html") or
+        "<title>dsh" in c or
+        "window.__moduleloader__" in c or
+        "window.__dsh_boot__" in c
+    )
+
+def extract_text_from_obj(obj) -> str:
+    if obj is None:
+        return ""
+    if isinstance(obj, str):
+        if is_html_content(obj):
+            return ""
+        return obj
+    if isinstance(obj, list):
+        parts = [extract_text_from_obj(item) for item in obj]
+        return "\n".join(filter(None, parts))
+    if isinstance(obj, dict):
+        # Prefer delta / text / content / output / result / message
+        for key in ["delta", "text", "content", "output", "result", "message"]:
+            if key in obj and obj[key]:
+                val = extract_text_from_obj(obj[key])
+                if val:
+                    return val
+        if "parts" in obj and isinstance(obj["parts"], list):
+            return extract_text_from_obj(obj["parts"])
+    return ""
+
 def extract_dsh_sessions_and_workspaces(obj, default_ws="deepseek-agent"):
     workspaces = set()
     sessions = []
     
+    if isinstance(obj, str) and is_html_content(obj):
+        return list(workspaces), sessions
+
     def process_item(it):
         if not isinstance(it, dict):
             return
@@ -606,14 +642,6 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
         "payload": {"workspace": "deepseek-agent"}
     }
 
-    rpc_list_def_payload = {
-        "type": "client-request",
-        "rpcId": f"rpc_list_def_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
-        "mode": "steer",
-        "method": "session.list",
-        "payload": {"workspace": "default"}
-    }
-
     rpc_workspace_payload = {
         "type": "client-request",
         "rpcId": f"rpc_ws_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
@@ -622,30 +650,7 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
         "payload": {}
     }
 
-    endpoints = [
-        (f"{harness_base}/v1/agent", "POST", rpc_list_payload),
-        (f"{harness_base}/v1/agent", "POST", rpc_list_ws_payload),
-        (f"{harness_base}/v1/agent", "POST", rpc_list_def_payload),
-        (f"{harness_base}/v1/agent", "POST", rpc_workspace_payload),
-        (f"{harness_base}/agent", "POST", rpc_list_payload),
-        (f"{harness_base}/agent", "POST", rpc_list_ws_payload),
-        (f"{harness_base}/api/sessions", "GET", None),
-        (f"{harness_base}/sessions", "GET", None),
-        (f"{harness_base}/api/workspaces", "GET", None),
-        (f"{harness_base}/workspaces", "GET", None),
-        (f"{harness_base}/api/v1/sessions", "GET", None),
-        (f"{harness_base}/v1/sessions", "GET", None),
-        (f"{harness_base}/api/workspace.list", "POST", rpc_workspace_payload),
-        (f"{harness_base}/session.list", "POST", rpc_list_payload),
-        (f"{harness_base}/session.list", "POST", rpc_list_ws_payload),
-        (f"{harness_base}/api/session.list", "POST", rpc_list_payload),
-        (f"{harness_base}/api/session.list", "POST", rpc_list_ws_payload),
-        (f"{harness_base}/session/list", "POST", rpc_list_payload),
-        (f"{harness_base}/api/session/list", "GET", None),
-        (f"{harness_base}/api/v1/agent", "POST", rpc_list_payload)
-    ]
-
-    # 尝试直接通过本地 WebSocket RPC 查询 DSH 会话 (DSH Local Build 最常用交互通道)
+    # 尝试直接通过本地 WebSocket RPC 查询 DSH 会话
     if HAS_WEBSOCKETS and not harness_base.startswith("https://"):
         ws_probe_urls = [
             f"{harness_base.replace('http://', 'ws://')}/v1/agent",
@@ -655,26 +660,35 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
         for ws_probe_url in ws_probe_urls:
             try:
                 async with websockets.connect(ws_probe_url, open_timeout=1.5, close_timeout=1.5) as local_ws:
-                    # 发送 session.list 请求
-                    await local_ws.send(json.dumps(rpc_list_ws_payload))
-                    try:
-                        resp_raw = await asyncio.wait_for(local_ws.recv(), timeout=2.0)
-                        resp_obj = json.loads(resp_raw)
-                        found_ws, found_sess = extract_dsh_sessions_and_workspaces(resp_obj)
-                        for w in found_ws:
-                            if w and w not in workspaces:
-                                workspaces.append(w)
-                        for s in found_sess:
-                            sid = s.get("sessionId") or s.get("id")
-                            if sid and sid not in seen_ids:
-                                seen_ids.add(sid)
-                                sessions.append(s)
-                    except Exception:
-                        pass
+                    for p in [rpc_list_ws_payload, rpc_list_payload, rpc_workspace_payload]:
+                        try:
+                            await local_ws.send(json.dumps(p))
+                            resp_raw = await asyncio.wait_for(local_ws.recv(), timeout=1.5)
+                            if not is_html_content(resp_raw):
+                                resp_obj = json.loads(resp_raw)
+                                found_ws, found_sess = extract_dsh_sessions_and_workspaces(resp_obj)
+                                for w in found_ws:
+                                    if w and w not in workspaces:
+                                        workspaces.append(w)
+                                for s in found_sess:
+                                    sid = s.get("sessionId") or s.get("id")
+                                    if sid and sid not in seen_ids:
+                                        seen_ids.add(sid)
+                                        sessions.append(s)
+                        except Exception:
+                            continue
                     if len(sessions) > 0:
                         break
             except Exception:
                 continue
+
+    endpoints = [
+        (f"{harness_base}/api/sessions", "GET", None),
+        (f"{harness_base}/api/workspaces", "GET", None),
+        (f"{harness_base}/api/v1/sessions", "GET", None),
+        (f"{harness_base}/api/session.list", "POST", rpc_list_payload),
+        (f"{harness_base}/api/session.list", "POST", rpc_list_ws_payload),
+    ]
 
     for ep, mth, pld in endpoints:
         def do_req(url=ep, method=mth, data_dict=pld):
@@ -685,11 +699,13 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
                 headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
                 method=method
             )
-            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=3) as response:
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=2) as response:
                 return response.read().decode("utf-8")
 
         try:
             raw = await loop.run_in_executor(None, do_req)
+            if is_html_content(raw):
+                continue
             resp = json.loads(raw)
             found_ws, found_sess = extract_dsh_sessions_and_workspaces(resp)
             for w in found_ws:
@@ -723,7 +739,8 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
             "mode": "steer",
             "method": "session.create",
             "payload": {
-                "workspace": target_ws
+                "workspace": target_ws,
+                "title": session_title
             }
         },
         {
@@ -732,8 +749,7 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
             "mode": "steer",
             "method": "session.create",
             "payload": {
-                "workspace": target_ws,
-                "title": session_title
+                "workspace": target_ws
             }
         },
         {
@@ -745,17 +761,7 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
         }
     ]
 
-    create_endpoints = [
-        f"{harness_base}/v1/agent",
-        f"{harness_base}/agent",
-        f"{harness_base}/session.create",
-        f"{harness_base}/api/session.create",
-        f"{harness_base}/session/create",
-        f"{harness_base}/v1/session.create",
-        f"{harness_base}/api/v1/agent"
-    ]
-
-    # 首先尝试通过本地 WebSocket 创建会话 (DSH Local Build 最快最准通道)
+    # 首先通过本地 WebSocket 创建会话 (DSH Local Cordis RPC 核心通道)
     if HAS_WEBSOCKETS and not harness_base.startswith("https://"):
         ws_probe_urls = [
             f"{harness_base.replace('http://', 'ws://')}/v1/agent",
@@ -764,83 +770,38 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
         ]
         for ws_url in ws_probe_urls:
             try:
-                async with websockets.connect(ws_url, open_timeout=1.5, close_timeout=1.5) as local_ws:
+                async with websockets.connect(ws_url, open_timeout=2.0, close_timeout=2.0) as local_ws:
                     for pld in create_payloads:
                         try:
                             await local_ws.send(json.dumps(pld))
-                            resp_raw = await asyncio.wait_for(local_ws.recv(), timeout=2.0)
-                            resp = json.loads(resp_raw)
-                            if isinstance(resp, dict) and resp.get("ok") is not False:
-                                s_id = None
-                                for loc in [resp.get("result"), resp.get("payload"), resp.get("data"), resp.get("details"), resp]:
-                                    if isinstance(loc, dict):
-                                        s_id = loc.get("sessionId") or loc.get("id") or loc.get("session_id")
-                                        if s_id:
+                            # 监听可能的多条事件或响应
+                            for _ in range(5):
+                                resp_raw = await asyncio.wait_for(local_ws.recv(), timeout=2.0)
+                                if is_html_content(resp_raw):
+                                    continue
+                                resp = json.loads(resp_raw)
+                                if isinstance(resp, dict) and resp.get("ok") is not False:
+                                    s_id = None
+                                    for loc in [resp.get("result"), resp.get("payload"), resp.get("data"), resp.get("details"), resp]:
+                                        if isinstance(loc, dict):
+                                            s_id = loc.get("sessionId") or loc.get("sessionID") or loc.get("id") or loc.get("session_id")
+                                            if s_id:
+                                                break
+                                        elif isinstance(loc, str) and len(loc) >= 8 and not loc.startswith("{"):
+                                            s_id = loc
                                             break
-                                    elif isinstance(loc, str) and len(loc) >= 8 and not loc.startswith("{"):
-                                        s_id = loc
-                                        break
-                                if s_id:
-                                    session_info = {
-                                        "id": str(s_id),
-                                        "sessionId": str(s_id),
-                                        "title": session_title,
-                                        "workspace": target_ws,
-                                        "updatedAt": int(time.time() * 1000)
-                                    }
-                                    LOCAL_SESSION_CACHE = [session_info] + [s for s in LOCAL_SESSION_CACHE if (s.get("sessionId") or s.get("id")) != str(s_id)]
-                                    return True, str(s_id), session_info
+                                    if s_id:
+                                        session_info = {
+                                            "id": str(s_id),
+                                            "sessionId": str(s_id),
+                                            "title": session_title,
+                                            "workspace": target_ws,
+                                            "updatedAt": int(time.time() * 1000)
+                                        }
+                                        LOCAL_SESSION_CACHE = [session_info] + [s for s in LOCAL_SESSION_CACHE if (s.get("sessionId") or s.get("id")) != str(s_id)]
+                                        return True, str(s_id), session_info
                         except Exception:
                             continue
-            except Exception:
-                continue
-
-    for pld in create_payloads:
-        for ep in create_endpoints:
-            def do_req(url=ep, req_dict=pld):
-                req_data = json.dumps(req_dict).encode("utf-8")
-                req = urllib.request.Request(
-                    url,
-                    data=req_data,
-                    headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
-                    method="POST"
-                )
-                with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=5) as response:
-                    return response.read().decode("utf-8")
-
-            try:
-                raw = await loop.run_in_executor(None, do_req)
-                resp = json.loads(raw)
-                if isinstance(resp, dict):
-                    if resp.get("ok") is False and "error" in resp:
-                        continue
-                    
-                    s_id = None
-                    for loc in [
-                        resp.get("result"),
-                        resp.get("payload"),
-                        resp.get("data"),
-                        resp.get("details"),
-                        resp
-                    ]:
-                        if isinstance(loc, dict):
-                            s_id = loc.get("sessionId") or loc.get("id") or loc.get("session_id")
-                            if s_id:
-                                break
-                        elif isinstance(loc, str) and len(loc) >= 8 and not loc.startswith("{"):
-                            s_id = loc
-                            break
-
-                    if s_id:
-                        session_info = {
-                            "id": str(s_id),
-                            "sessionId": str(s_id),
-                            "title": session_title,
-                            "workspace": target_ws,
-                            "updatedAt": int(time.time() * 1000)
-                        }
-                        LOCAL_SESSION_CACHE = [session_info] + [s for s in LOCAL_SESSION_CACHE if (s.get("sessionId") or s.get("id")) != str(s_id)]
-                        return True, str(s_id), session_info
             except Exception:
                 continue
 
@@ -863,6 +824,173 @@ def is_harness_error_response(resp_obj):
     if "error" in resp_obj and resp_obj["error"] is not None and resp_obj["error"] is not False:
         return True
     return False
+
+async def execute_dsh_via_ws(
+    harness_url: str,
+    target_workspace: str,
+    model_name: str,
+    active_session_id: str,
+    content_list: list,
+    prompt: str,
+    on_step_callback
+):
+    harness_base = harness_url.rstrip("/")
+    ws_urls = [
+        f"{harness_base.replace('http://', 'ws://')}/v1/agent",
+        f"{harness_base.replace('http://', 'ws://')}/agent",
+        f"{harness_base.replace('http://', 'ws://')}"
+    ]
+
+    for ws_url in ws_urls:
+        try:
+            async with websockets.connect(
+                ws_url,
+                open_timeout=3.0,
+                close_timeout=3.0,
+                max_size=30 * 1024 * 1024
+            ) as dsh_ws:
+                cur_session_id = active_session_id
+                
+                # 若需要先注册会话
+                if not cur_session_id or cur_session_id in ("__auto__", "__auto_new__", "default_session") or cur_session_id.startswith("session_"):
+                    create_rpc_id = f"rpc_create_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+                    create_msg = {
+                        "type": "client-request",
+                        "rpcId": create_rpc_id,
+                        "mode": "steer",
+                        "method": "session.create",
+                        "payload": {
+                            "workspace": target_workspace,
+                            "title": f"任务_{create_rpc_id[-6:]}"
+                        }
+                    }
+                    await dsh_ws.send(json.dumps(create_msg))
+                    
+                    for _ in range(8):
+                        try:
+                            raw = await asyncio.wait_for(dsh_ws.recv(), timeout=2.5)
+                            if is_html_content(raw):
+                                continue
+                            data = json.loads(raw)
+                            if isinstance(data, dict):
+                                sid = None
+                                for loc in [data.get("result"), data.get("payload"), data.get("data"), data.get("details"), data]:
+                                    if isinstance(loc, dict):
+                                        sid = loc.get("sessionId") or loc.get("sessionID") or loc.get("id") or loc.get("session_id")
+                                        if sid:
+                                            break
+                                if sid:
+                                    cur_session_id = str(sid)
+                                    await on_step_callback(f"✨ 本地 DSH 服务端已分配会话 ID ({cur_session_id[:8]}...)，正在下发指令")
+                                    break
+                        except Exception:
+                            break
+                
+                if not cur_session_id:
+                    cur_session_id = str(uuid.uuid4())
+
+                # 发送提示词任务
+                prompt_rpc_id = f"rpc_prompt_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+                prompt_msg = {
+                    "type": "client-request",
+                    "rpcId": prompt_rpc_id,
+                    "mode": "steer",
+                    "method": "session.prompt",
+                    "payload": {
+                        "sessionId": cur_session_id,
+                        "sessionID": cur_session_id,
+                        "workspace": target_workspace,
+                        "mode": "steer",
+                        "prompt": content_list,
+                        "parts": content_list,
+                        "content": content_list,
+                        "text": prompt or "",
+                        "model": model_name or "deepseek-chat"
+                    }
+                }
+                
+                await dsh_ws.send(json.dumps(prompt_msg))
+                await on_step_callback("⚡ 已向本地 DSH 智能体发送 WebSocket 指令，等待推理返回...")
+
+                accumulated_text = []
+                start_t = time.time()
+
+                while time.time() - start_t < 180:
+                    try:
+                        raw = await asyncio.wait_for(dsh_ws.recv(), timeout=12.0)
+                        if is_html_content(raw):
+                            continue
+                        msg = json.loads(raw)
+                        if not isinstance(msg, dict):
+                            continue
+
+                        # 检查错误
+                        if msg.get("ok") is False or ("error" in msg and msg["error"]):
+                            err_info = msg.get("error", {})
+                            err_str = json.dumps(err_info, ensure_ascii=False) if isinstance(err_info, dict) else str(err_info)
+                            if "session-not-found" in err_str or "not found" in err_str.lower():
+                                await on_step_callback("🔄 检测到会话不存在，正在自动重新创建会话...")
+                                new_create_rpc_id = f"rpc_rec_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+                                await dsh_ws.send(json.dumps({
+                                    "type": "client-request",
+                                    "rpcId": new_create_rpc_id,
+                                    "mode": "steer",
+                                    "method": "session.create",
+                                    "payload": {"workspace": target_workspace}
+                                }))
+                                for _ in range(5):
+                                    r_raw = await asyncio.wait_for(dsh_ws.recv(), timeout=2.0)
+                                    r_data = json.loads(r_raw)
+                                    sid = None
+                                    for loc in [r_data.get("result"), r_data.get("payload"), r_data]:
+                                        if isinstance(loc, dict):
+                                            sid = loc.get("sessionId") or loc.get("id")
+                                            if sid: break
+                                    if sid:
+                                        cur_session_id = str(sid)
+                                        break
+                                prompt_msg["payload"]["sessionId"] = cur_session_id
+                                prompt_msg["payload"]["sessionID"] = cur_session_id
+                                prompt_msg["rpcId"] = f"rpc_reprompt_{int(time.time() * 1000)}"
+                                await dsh_ws.send(json.dumps(prompt_msg))
+                                continue
+                            else:
+                                await on_step_callback(f"⚠️ DSH 状态: {err_str[:60]}")
+
+                        mtype = msg.get("type", "")
+                        event_name = msg.get("event", "")
+                        
+                        extracted = extract_text_from_obj(msg)
+                        if extracted and not is_html_content(extracted):
+                            if not accumulated_text or extracted not in accumulated_text[-1]:
+                                accumulated_text.append(extracted)
+
+                        if event_name in ("session.turn.finish", "turn.finish", "turn.end", "session.finish") or msg.get("status") in ("finished", "completed"):
+                            break
+
+                        if mtype in ("client-response", "response") and msg.get("rpcId") == prompt_msg.get("rpcId"):
+                            res_obj = msg.get("result") or msg.get("payload")
+                            if res_obj:
+                                res_txt = extract_text_from_obj(res_obj)
+                                if res_txt and not is_html_content(res_txt):
+                                    accumulated_text.append(res_txt)
+                            break
+
+                    except asyncio.TimeoutError:
+                        if accumulated_text:
+                            break
+                        continue
+                    except Exception:
+                        break
+
+                final_output = "\n".join(accumulated_text).strip()
+                if final_output and not is_html_content(final_output):
+                    return True, final_output
+
+        except Exception:
+            continue
+
+    return False, None
 
 async def execute_local_harness(
     task_id: str,
@@ -888,22 +1016,6 @@ async def execute_local_harness(
     await on_step_callback(f"🚀 [1/3] 已接收到任务，正在调用本地 DeepSeek Harness Agent ({model_name})...")
 
     active_session_id = (session_id or "").strip()
-    # 如果会话 ID 为空、为占位符、或者本地未注册有效会话，则强制向 DSH 发起 session.create 注册
-    needs_session_creation = (
-        not active_session_id or 
-        active_session_id in ("__auto__", "__auto_new__", "default_session", f"session_{task_id}")
-    )
-    if needs_session_creation:
-        await on_step_callback(f"✨ 正在连接本地 DSH 服务端在工作区 [{target_workspace}] 注册新会话...")
-        ok_create, new_sid, sess_info = await create_dsh_session_explicit(
-            harness_url, workspace=target_workspace, title=f"任务_{task_id[:6]}", model=model_name
-        )
-        if ok_create and new_sid:
-            active_session_id = new_sid
-            await on_step_callback(f"✨ 本地 DSH 服务端已分配会话 ID ({active_session_id[:8]}...)，正在下发指令")
-        else:
-            active_session_id = new_sid or str(uuid.uuid4())
-            await on_step_callback(f"⚠️ DSH 会话创建采用备用 ID ({active_session_id[:8]}...)，准备通信")
 
     content_list = []
     if messages and isinstance(messages, list):
@@ -918,83 +1030,53 @@ async def execute_local_harness(
     if not content_list:
         content_list = [{"type": "text", "text": str(prompt or "")}]
 
-    def build_rpc_payloads(sid):
-        rpc_id_steer = f"rpc_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
-        rpc_id_queue = f"rpc_{int(time.time() * 1000) + 1}_{uuid.uuid4().hex[:6]}"
-        
-        # DSH 官方协议全面兼容载荷 (支持 prompt / parts / content / text)
-        steer_payload = {
-            "type": "client-request",
-            "rpcId": rpc_id_steer,
-            "mode": "steer",
-            "method": "session.prompt",
-            "payload": {
-                "sessionId": sid,
-                "sessionID": sid,
-                "workspace": target_workspace,
-                "mode": "steer",
-                "prompt": content_list,
-                "parts": content_list,
-                "content": content_list,
-                "text": prompt or "",
-                "model": model_name or "deepseek-chat"
-            }
-        }
-        queue_payload = {
-            "type": "client-request",
-            "rpcId": rpc_id_queue,
-            "mode": "queue",
-            "method": "session.prompt",
-            "payload": {
-                "sessionId": sid,
-                "sessionID": sid,
-                "workspace": target_workspace,
-                "mode": "queue",
-                "prompt": content_list,
-                "parts": content_list,
-                "content": content_list,
-                "text": prompt or "",
-                "model": model_name or "deepseek-chat"
-            }
-        }
-        return steer_payload, queue_payload
-
-    dsh_rpc_payload_steer, dsh_rpc_payload_queue = build_rpc_payloads(active_session_id)
+    # 1. 优先尝试本地 3081 HTTP 适配器 (用户在 DSH 运行的 Node 适配服务)
+    adapter_base = harness_base
+    if "3080" in harness_base:
+        adapter_base = harness_base.replace("3080", "3081")
 
     candidate_endpoints = []
-    if harness_base.endswith("/v1/agent") or harness_base.endswith("/agent"):
-        candidate_endpoints.append((harness_base, dsh_rpc_payload_steer, "DSH 原生 RPC 接口 (/v1/agent, steer)"))
-        candidate_endpoints.append((harness_base, dsh_rpc_payload_queue, "DSH 原生 RPC 接口 (/v1/agent, queue)"))
-    elif harness_base.endswith("/session.prompt") or harness_base.endswith("/session/prompt"):
-        candidate_endpoints.append((harness_base, dsh_rpc_payload_steer, "DSH RPC 原生接口 (steer 模式)"))
-        candidate_endpoints.append((harness_base, dsh_rpc_payload_queue, "DSH RPC 原生接口 (queue 降级)"))
-    elif harness_base.endswith("/v1") or harness_base.endswith("/chat/completions"):
-        endpoint_url = harness_base if harness_base.endswith("/chat/completions") else f"{harness_base}/chat/completions"
-        candidate_endpoints.append((endpoint_url, {
+    
+    # 3081 适配器候选接口
+    if "3081" in adapter_base or "3080" in harness_base:
+        candidate_endpoints.append((f"{adapter_base}/v1/chat/completions", {
             "model": model_name or "deepseek-chat",
             "messages": messages if messages else [{"role": "user", "content": prompt}],
-            "stream": False,
-            "temperature": 0.7
-        }, "OpenAI 兼容接口"))
-    else:
-        candidate_endpoints.append((f"{harness_base}/v1/agent", dsh_rpc_payload_steer, "DSH 原生 RPC 接口 (/v1/agent, steer)"))
-        candidate_endpoints.append((f"{harness_base}/v1/agent", dsh_rpc_payload_queue, "DSH 原生 RPC 接口 (/v1/agent, queue)"))
-        candidate_endpoints.append((f"{harness_base}/agent", dsh_rpc_payload_steer, "DSH 原生 RPC 接口 (/agent, steer)"))
-        candidate_endpoints.append((f"{harness_base}/session.prompt", dsh_rpc_payload_steer, "DSH 原生 RPC 接口 (/session.prompt, steer)"))
-        candidate_endpoints.append((f"{harness_base}/session.prompt", dsh_rpc_payload_queue, "DSH 原生 RPC 接口 (/session.prompt, queue)"))
-        candidate_endpoints.append((f"{harness_base}/api/session.prompt", dsh_rpc_payload_steer, "DSH API RPC 接口 (/api/session.prompt, steer)"))
-        candidate_endpoints.append((f"{harness_base}/api/session.prompt", dsh_rpc_payload_queue, "DSH API RPC 接口 (/api/session.prompt, queue)"))
-        candidate_endpoints.append((f"{harness_base}/v1/chat/completions", {
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}],
-            "stream": False,
-            "temperature": 0.7
-        }, "OpenAI 兼容接口 (/v1/chat/completions)"))
-        candidate_endpoints.append((f"{harness_base}/api/chat", {
+            "stream": False
+        }, "DSH 3081 HTTP 适配器 (/v1/chat/completions)"))
+        candidate_endpoints.append((f"{adapter_base}/v1/agent/prompt", {
             "prompt": prompt,
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}]
-        }, "本地 Agent 接口 (/api/chat)"))
+            "sessionId": active_session_id,
+            "workspace": target_workspace,
+            "model": model_name or "deepseek-chat"
+        }, "DSH 3081 HTTP 适配器 (/v1/agent/prompt)"))
+        candidate_endpoints.append((f"{adapter_base}/api/session.prompt", {
+            "prompt": prompt,
+            "sessionId": active_session_id,
+            "workspace": target_workspace
+        }, "DSH 3081 HTTP 适配器 (/api/session.prompt)"))
+
+    # 2. 原生 WebSocket 通道
+    if HAS_WEBSOCKETS and not harness_base.startswith("https://"):
+        ws_ok, ws_output = await execute_dsh_via_ws(
+            harness_url, target_workspace, model_name, active_session_id, content_list, prompt, on_step_callback
+        )
+        if ws_ok and ws_output and not is_html_content(ws_output):
+            await on_step_callback("✅ [3/3] 本地 DeepSeek 智能体通过 WebSocket RPC 执行完毕，正在向 App 调度中心回传结果...")
+            return True, str(ws_output)
+
+    # 3. HTTP 标准接口
+    candidate_endpoints.append((f"{harness_base}/v1/chat/completions", {
+        "model": model_name or "deepseek-chat",
+        "messages": messages if messages else [{"role": "user", "content": prompt}],
+        "stream": False,
+        "temperature": 0.7
+    }, "OpenAI 兼容接口 (/v1/chat/completions)"))
+    candidate_endpoints.append((f"{harness_base}/api/chat", {
+        "prompt": prompt,
+        "model": model_name or "deepseek-chat",
+        "messages": messages if messages else [{"role": "user", "content": prompt}]
+    }, "本地 Agent 接口 (/api/chat)"))
 
     await on_step_callback("⚡ [2/3] 本地模型/Agent 正在进行深度推理与任务执行...")
 
@@ -1023,100 +1105,30 @@ async def execute_local_harness(
 
         try:
             raw_resp = await loop.run_in_executor(None, do_request)
+            if is_html_content(raw_resp):
+                continue
             try:
                 resp_json = json.loads(raw_resp)
                 if isinstance(resp_json, dict):
                     if is_harness_error_response(resp_json):
                         err_detail = resp_json.get("error", resp_json)
-                        err_str = json.dumps(err_detail, ensure_ascii=False)
-                        last_err = err_str
-
-                        if "session-not-found" in err_str or "not found" in err_str.lower() or "session" in err_str.lower():
-                            await on_step_callback(f"🔄 检测到原会话 ({str(active_session_id)[:8]}...) 未注册或已过期，正在自动在工作区 [{target_workspace}] 创建新会话并重试...")
-                            ok_create, new_sid, _ = await create_dsh_session_explicit(
-                                harness_url, workspace=target_workspace, title=f"自愈会话_{task_id[:6]}", model=model_name
-                            )
-                            if ok_create and new_sid:
-                                active_session_id = new_sid
-                                steer_p, queue_p = build_rpc_payloads(active_session_id)
-                                
-                                retry_done = False
-                                for retry_url, retry_body, r_name in [
-                                    (f"{harness_base}/v1/agent", steer_p, "DSH 原生 RPC 接口 (/v1/agent, steer)"),
-                                    (f"{harness_base}/v1/agent", queue_p, "DSH 原生 RPC 接口 (/v1/agent, queue)"),
-                                    (f"{harness_base}/session.prompt", steer_p, "DSH 原生 RPC 接口 (/session.prompt, steer)"),
-                                    (f"{harness_base}/api/session.prompt", steer_p, "DSH API RPC 接口 (/api/session.prompt, steer)")
-                                ]:
-                                    try:
-                                        r_data = json.dumps(retry_body).encode("utf-8")
-                                        retry_resp_raw = await loop.run_in_executor(None, lambda u=retry_url, d=r_data: do_request(url=u, data=d))
-                                        retry_json = json.loads(retry_resp_raw)
-                                        if not is_harness_error_response(retry_json):
-                                            resp_json = retry_json
-                                            raw_resp = retry_resp_raw
-                                            ep_name = r_name
-                                            retry_done = True
-                                            break
-                                    except Exception:
-                                        continue
-                                
-                                if not retry_done:
-                                    continue
-                            else:
-                                continue
-                        else:
-                            continue
+                        last_err = json.dumps(err_detail, ensure_ascii=False)
+                        continue
 
                     # 提取文本结果
-                    if "payload" in resp_json and isinstance(resp_json["payload"], dict):
-                        p_content = resp_json["payload"].get("content") or resp_json["payload"].get("text") or resp_json["payload"].get("output")
-                        if p_content:
-                            if isinstance(p_content, list):
-                                texts = [item.get("text", "") if isinstance(item, dict) else str(item) for item in p_content]
-                                output_content = "\n".join(filter(None, texts))
-                            else:
-                                output_content = str(p_content)
-
-                    if output_content is None and "result" in resp_json:
-                        r_obj = resp_json["result"]
-                        if isinstance(r_obj, dict):
-                            r_content = r_obj.get("content") or r_obj.get("text") or r_obj.get("output") or r_obj.get("message")
-                            if isinstance(r_content, list):
-                                texts = [item.get("text", "") if isinstance(item, dict) else str(item) for item in r_content]
-                                output_content = "\n".join(filter(None, texts))
-                            elif r_content:
-                                output_content = str(r_content)
-                            else:
-                                output_content = json.dumps(r_obj, ensure_ascii=False)
-                        elif isinstance(r_obj, str):
-                            output_content = r_obj
-                        else:
-                            output_content = json.dumps(r_obj, ensure_ascii=False)
+                    txt = extract_text_from_obj(resp_json)
+                    if txt and not is_html_content(txt):
+                        output_content = txt
 
                     if output_content is None and "choices" in resp_json and len(resp_json["choices"]) > 0:
                         output_content = resp_json["choices"][0].get("message", {}).get("content", "")
-                    elif output_content is None and "response" in resp_json:
-                        output_content = resp_json["response"] if isinstance(resp_json["response"], str) else json.dumps(resp_json["response"], ensure_ascii=False)
-                    elif output_content is None and "content" in resp_json:
-                        output_content = resp_json["content"] if isinstance(resp_json["content"], str) else json.dumps(resp_json["content"], ensure_ascii=False)
-                    elif output_content is None and "text" in resp_json:
-                        output_content = resp_json["text"] if isinstance(resp_json["text"], str) else json.dumps(resp_json["text"], ensure_ascii=False)
-                    elif output_content is None and "output" in resp_json:
-                        output_content = resp_json["output"] if isinstance(resp_json["output"], str) else json.dumps(resp_json["output"], ensure_ascii=False)
-                    elif output_content is None and not is_harness_error_response(resp_json):
-                        output_content = json.dumps(resp_json, ensure_ascii=False)
                 else:
                     output_content = str(resp_json)
             except Exception:
-                try:
-                    # Check if raw_resp looks like error json
-                    check_obj = json.loads(raw_resp)
-                    if not is_harness_error_response(check_obj):
-                        output_content = raw_resp
-                except Exception:
+                if not is_html_content(raw_resp):
                     output_content = raw_resp
 
-            if output_content is not None:
+            if output_content is not None and not is_html_content(output_content):
                 success_endpoint_name = ep_name
                 break
 
@@ -1130,7 +1142,7 @@ async def execute_local_harness(
             last_err = str(ex)
             continue
 
-    if output_content is not None:
+    if output_content is not None and not is_html_content(output_content):
         await on_step_callback(f"✅ [3/3] 本地 DeepSeek 智能体通过 {success_endpoint_name} 执行完毕，正在向 App 调度中心回传结果...")
         return True, str(output_content)
 
@@ -1138,7 +1150,7 @@ async def execute_local_harness(
         "❌ 连接本地 DeepSeek Harness / Agent 服务失败 (" + str(harness_base) + ")。\n"
         "   最近一次尝试报错: " + str(last_err) + "\n"
         "   💡 排查指南:\n"
-        "   1. 请确认本地 3080 端口已正常开启 (http://127.0.0.1:3080)；\n"
+        "   1. 请确认本地 3081 适配器服务在运行 (http://127.0.0.1:3081)；\n"
         "   2. 若使用其他端口，可在启动命令加上 --harness-url http://127.0.0.1:端口。"
     )
     await on_step_callback(f"❌ 本地服务连接失败: {last_err or '所有端点均不可达'}")
