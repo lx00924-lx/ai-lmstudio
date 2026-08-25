@@ -528,7 +528,7 @@ def extract_dsh_sessions_and_workspaces(obj, default_ws="deepseek-agent"):
     def process_item(it):
         if not isinstance(it, dict):
             return
-        sid = it.get("sessionId") or it.get("id") or it.get("session_id")
+        sid = it.get("sessionId") or it.get("sessionID") or it.get("id") or it.get("session_id") or it.get("uuid")
         if sid:
             ws = it.get("workspace") or default_ws
             workspaces.add(ws)
@@ -606,6 +606,14 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
         "payload": {"workspace": "deepseek-agent"}
     }
 
+    rpc_list_def_payload = {
+        "type": "client-request",
+        "rpcId": f"rpc_list_def_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+        "mode": "steer",
+        "method": "session.list",
+        "payload": {"workspace": "default"}
+    }
+
     rpc_workspace_payload = {
         "type": "client-request",
         "rpcId": f"rpc_ws_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
@@ -617,8 +625,10 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
     endpoints = [
         (f"{harness_base}/v1/agent", "POST", rpc_list_payload),
         (f"{harness_base}/v1/agent", "POST", rpc_list_ws_payload),
+        (f"{harness_base}/v1/agent", "POST", rpc_list_def_payload),
         (f"{harness_base}/v1/agent", "POST", rpc_workspace_payload),
         (f"{harness_base}/agent", "POST", rpc_list_payload),
+        (f"{harness_base}/agent", "POST", rpc_list_ws_payload),
         (f"{harness_base}/api/sessions", "GET", None),
         (f"{harness_base}/sessions", "GET", None),
         (f"{harness_base}/api/workspaces", "GET", None),
@@ -627,11 +637,44 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
         (f"{harness_base}/v1/sessions", "GET", None),
         (f"{harness_base}/api/workspace.list", "POST", rpc_workspace_payload),
         (f"{harness_base}/session.list", "POST", rpc_list_payload),
+        (f"{harness_base}/session.list", "POST", rpc_list_ws_payload),
         (f"{harness_base}/api/session.list", "POST", rpc_list_payload),
+        (f"{harness_base}/api/session.list", "POST", rpc_list_ws_payload),
         (f"{harness_base}/session/list", "POST", rpc_list_payload),
         (f"{harness_base}/api/session/list", "GET", None),
         (f"{harness_base}/api/v1/agent", "POST", rpc_list_payload)
     ]
+
+    # 尝试直接通过本地 WebSocket RPC 查询 DSH 会话 (DSH Local Build 最常用交互通道)
+    if HAS_WEBSOCKETS and not harness_base.startswith("https://"):
+        ws_probe_urls = [
+            f"{harness_base.replace('http://', 'ws://')}/v1/agent",
+            f"{harness_base.replace('http://', 'ws://')}/agent",
+            f"{harness_base.replace('http://', 'ws://')}"
+        ]
+        for ws_probe_url in ws_probe_urls:
+            try:
+                async with websockets.connect(ws_probe_url, open_timeout=1.5, close_timeout=1.5) as local_ws:
+                    # 发送 session.list 请求
+                    await local_ws.send(json.dumps(rpc_list_ws_payload))
+                    try:
+                        resp_raw = await asyncio.wait_for(local_ws.recv(), timeout=2.0)
+                        resp_obj = json.loads(resp_raw)
+                        found_ws, found_sess = extract_dsh_sessions_and_workspaces(resp_obj)
+                        for w in found_ws:
+                            if w and w not in workspaces:
+                                workspaces.append(w)
+                        for s in found_sess:
+                            sid = s.get("sessionId") or s.get("id")
+                            if sid and sid not in seen_ids:
+                                seen_ids.add(sid)
+                                sessions.append(s)
+                    except Exception:
+                        pass
+                    if len(sessions) > 0:
+                        break
+            except Exception:
+                continue
 
     for ep, mth, pld in endpoints:
         def do_req(url=ep, method=mth, data_dict=pld):
@@ -679,13 +722,6 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
             "rpcId": f"rpc_create_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
             "mode": "steer",
             "method": "session.create",
-            "payload": {}
-        },
-        {
-            "type": "client-request",
-            "rpcId": f"rpc_create_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
-            "mode": "steer",
-            "method": "session.create",
             "payload": {
                 "workspace": target_ws
             }
@@ -699,6 +735,13 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
                 "workspace": target_ws,
                 "title": session_title
             }
+        },
+        {
+            "type": "client-request",
+            "rpcId": f"rpc_create_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+            "mode": "steer",
+            "method": "session.create",
+            "payload": {}
         }
     ]
 
@@ -711,6 +754,46 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
         f"{harness_base}/v1/session.create",
         f"{harness_base}/api/v1/agent"
     ]
+
+    # 首先尝试通过本地 WebSocket 创建会话 (DSH Local Build 最快最准通道)
+    if HAS_WEBSOCKETS and not harness_base.startswith("https://"):
+        ws_probe_urls = [
+            f"{harness_base.replace('http://', 'ws://')}/v1/agent",
+            f"{harness_base.replace('http://', 'ws://')}/agent",
+            f"{harness_base.replace('http://', 'ws://')}"
+        ]
+        for ws_url in ws_probe_urls:
+            try:
+                async with websockets.connect(ws_url, open_timeout=1.5, close_timeout=1.5) as local_ws:
+                    for pld in create_payloads:
+                        try:
+                            await local_ws.send(json.dumps(pld))
+                            resp_raw = await asyncio.wait_for(local_ws.recv(), timeout=2.0)
+                            resp = json.loads(resp_raw)
+                            if isinstance(resp, dict) and resp.get("ok") is not False:
+                                s_id = None
+                                for loc in [resp.get("result"), resp.get("payload"), resp.get("data"), resp.get("details"), resp]:
+                                    if isinstance(loc, dict):
+                                        s_id = loc.get("sessionId") or loc.get("id") or loc.get("session_id")
+                                        if s_id:
+                                            break
+                                    elif isinstance(loc, str) and len(loc) >= 8 and not loc.startswith("{"):
+                                        s_id = loc
+                                        break
+                                if s_id:
+                                    session_info = {
+                                        "id": str(s_id),
+                                        "sessionId": str(s_id),
+                                        "title": session_title,
+                                        "workspace": target_ws,
+                                        "updatedAt": int(time.time() * 1000)
+                                    }
+                                    LOCAL_SESSION_CACHE = [session_info] + [s for s in LOCAL_SESSION_CACHE if (s.get("sessionId") or s.get("id")) != str(s_id)]
+                                    return True, str(s_id), session_info
+                        except Exception:
+                            continue
+            except Exception:
+                continue
 
     for pld in create_payloads:
         for ep in create_endpoints:
@@ -770,7 +853,7 @@ async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepse
         "updatedAt": int(time.time() * 1000)
     }
     LOCAL_SESSION_CACHE = [fallback_session] + [s for s in LOCAL_SESSION_CACHE if (s.get("sessionId") or s.get("id")) != fallback_id]
-    return True, fallback_id, fallback_session
+    return False, fallback_id, fallback_session
 
 def is_harness_error_response(resp_obj):
     if not isinstance(resp_obj, dict):
@@ -805,16 +888,22 @@ async def execute_local_harness(
     await on_step_callback(f"🚀 [1/3] 已接收到任务，正在调用本地 DeepSeek Harness Agent ({model_name})...")
 
     active_session_id = (session_id or "").strip()
-    if not active_session_id or active_session_id in ("__auto__", "__auto_new__", "default_session", f"session_{task_id}"):
-        await on_step_callback(f"✨ 正在为本地工作区 [{target_workspace}] 创建专属新会话...")
-        ok_create, new_sid, _ = await create_dsh_session_explicit(
+    # 如果会话 ID 为空、为占位符、或者本地未注册有效会话，则强制向 DSH 发起 session.create 注册
+    needs_session_creation = (
+        not active_session_id or 
+        active_session_id in ("__auto__", "__auto_new__", "default_session", f"session_{task_id}")
+    )
+    if needs_session_creation:
+        await on_step_callback(f"✨ 正在连接本地 DSH 服务端在工作区 [{target_workspace}] 注册新会话...")
+        ok_create, new_sid, sess_info = await create_dsh_session_explicit(
             harness_url, workspace=target_workspace, title=f"任务_{task_id[:6]}", model=model_name
         )
         if ok_create and new_sid:
             active_session_id = new_sid
-            await on_step_callback(f"✨ 已创建本地新会话 ({active_session_id[:8]}...)，正在下发指令")
+            await on_step_callback(f"✨ 本地 DSH 服务端已分配会话 ID ({active_session_id[:8]}...)，正在下发指令")
         else:
-            active_session_id = str(uuid.uuid4())
+            active_session_id = new_sid or str(uuid.uuid4())
+            await on_step_callback(f"⚠️ DSH 会话创建采用备用 ID ({active_session_id[:8]}...)，准备通信")
 
     content_list = []
     if messages and isinstance(messages, list):
@@ -832,6 +921,8 @@ async def execute_local_harness(
     def build_rpc_payloads(sid):
         rpc_id_steer = f"rpc_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
         rpc_id_queue = f"rpc_{int(time.time() * 1000) + 1}_{uuid.uuid4().hex[:6]}"
+        
+        # DSH 官方协议全面兼容载荷 (支持 prompt / parts / content / text)
         steer_payload = {
             "type": "client-request",
             "rpcId": rpc_id_steer,
@@ -839,8 +930,13 @@ async def execute_local_harness(
             "method": "session.prompt",
             "payload": {
                 "sessionId": sid,
+                "sessionID": sid,
+                "workspace": target_workspace,
                 "mode": "steer",
+                "prompt": content_list,
+                "parts": content_list,
                 "content": content_list,
+                "text": prompt or "",
                 "model": model_name or "deepseek-chat"
             }
         }
@@ -851,8 +947,13 @@ async def execute_local_harness(
             "method": "session.prompt",
             "payload": {
                 "sessionId": sid,
+                "sessionID": sid,
+                "workspace": target_workspace,
                 "mode": "queue",
+                "prompt": content_list,
+                "parts": content_list,
                 "content": content_list,
+                "text": prompt or "",
                 "model": model_name or "deepseek-chat"
             }
         }
@@ -1007,7 +1108,13 @@ async def execute_local_harness(
                 else:
                     output_content = str(resp_json)
             except Exception:
-                output_content = raw_resp
+                try:
+                    # Check if raw_resp looks like error json
+                    check_obj = json.loads(raw_resp)
+                    if not is_harness_error_response(check_obj):
+                        output_content = raw_resp
+                except Exception:
+                    output_content = raw_resp
 
             if output_content is not None:
                 success_endpoint_name = ep_name

@@ -349,7 +349,8 @@ async function runServerSideGeneration({
 
         const selectedSessionId = (settings?.agentSessionId || "").trim();
         const selectedWorkspace = (settings?.agentWorkspace || "deepseek-agent").trim();
-        const sessionId = selectedSessionId || workingMessages[0]?.id || `session_${userId}`;
+        // Do NOT pass workingMessages[0]?.id as sessionId, otherwise DSH treats client message uuid as an invalid session
+        const sessionId = selectedSessionId || "__auto__";
         const taskPayload = {
           type: "run_agent",
           taskId,
