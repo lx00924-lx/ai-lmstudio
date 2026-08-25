@@ -79,7 +79,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showBackgroundInDarkMode: true,
   showDebugFloatButton: true,
   chatFontSize: 'base',
-  agentHarnessUrl: 'http://127.0.0.1:3080',
+  agentHarnessUrl: 'http://127.0.0.1:3081',
 };
 
 // Storage key helpers for local-first persistence
@@ -845,6 +845,18 @@ export default function App() {
   const deleteMessagesByRange = (days: number | 'all') => {
     if (user) {
       socket.emit("delete_messages_range", { userId: user.id, range: days });
+    }
+    
+    // 如果是清空全部对话，通知后端重置用户的当前 DSH 会话绑定，下次对话开启新会话
+    if (days === 'all') {
+      try {
+        const baseUrl = (window as any).Capacitor?.isNativePlatform?.() ? API_BASE_URL : '';
+        fetch(`${baseUrl}/api/agent/reset-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user?.id || 'guest', token: state.settings.agentToken })
+        }).catch(() => {});
+      } catch (_) {}
     }
     
     setState(prev => {

@@ -194,6 +194,7 @@ interface ConnectedAgent {
   queuedTasks?: any[];
   workspaces?: string[];
   sessions?: DshSessionInfo[];
+  activeUserSessions?: Map<string, string>;
 }
 
 const connectedAgents = new Map<string, ConnectedAgent>();
@@ -290,7 +291,7 @@ async function runServerSideGeneration({
 
       if (!isAgentOnline) {
         // Agent is offline
-        const offlineNotice = `> ⚠️ **【本地 Agent 模式提示】**\n> 检测到您已开启 **Agent 模式**，但未检测到本地 DeepSeek Harness 桥接连接。\n>\n> **快速解决**：\n> 1. 打开应用右上角 **设置 ➔ 🤖 本地 Agent**；\n> 2. 复制启动命令并在本地终端运行：\`python deepseek_bridge.py --token "${agentToken}" --server "https://lx00924ai.top" --harness-url "http://127.0.0.1:3080"\`；\n> 3. 或在聊天输入框左侧一键切换回 **「💬 普通模式」**。`;
+        const offlineNotice = `> ⚠️ **【本地 Agent 模式提示】**\n> 检测到您已开启 **Agent 模式**，但未检测到本地 DeepSeek Harness 桥接连接。\n>\n> **快速解决**：\n> 1. 打开应用右上角 **设置 ➔ 🤖 本地 Agent**；\n> 2. 复制启动命令并在本地终端运行：\`python deepseek_bridge.py --token "${agentToken}" --server "https://lx00924ai.top" --harness-url "http://127.0.0.1:3081"\`；\n> 3. 或在聊天输入框左侧一键切换回 **「💬 普通模式」**。`;
         
         onChunk(offlineNotice);
         genState.status = 'completed';
@@ -349,17 +350,28 @@ async function runServerSideGeneration({
 
         const selectedSessionId = (settings?.agentSessionId || "").trim();
         const selectedWorkspace = (settings?.agentWorkspace || "deepseek-agent").trim();
-        // Do NOT pass workingMessages[0]?.id as sessionId, otherwise DSH treats client message uuid as an invalid session
-        const sessionId = selectedSessionId || "__auto__";
+        
+        // 自动绑定对话会话：若设置未指定特定会话，按用户维度维持一个稳定的活跃会话标识
+        let sessionId = selectedSessionId;
+        if (!sessionId) {
+          if (!agent.activeUserSessions) agent.activeUserSessions = new Map<string, string>();
+          let userAssignedSid = agent.activeUserSessions.get(userId);
+          if (!userAssignedSid) {
+            userAssignedSid = `session_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            agent.activeUserSessions.set(userId, userAssignedSid);
+          }
+          sessionId = userAssignedSid;
+        }
+
         const taskPayload = {
           type: "run_agent",
           taskId,
           sessionId,
-          agentSessionId: selectedSessionId,
+          agentSessionId: sessionId,
           agentWorkspace: selectedWorkspace,
           prompt: rawUserPrompt,
           messages: workingMessages.slice(-5),
-          harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3080",
+          harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3081",
           model: settings?.modelName || "deepseek-chat",
           apiEndpoint: settings?.apiEndpoint || "",
           apiKey: settings?.apiKey || "",
@@ -1257,7 +1269,7 @@ async function startServer() {
   // Dedicated API download route for Windows 1-Click .bat package
   app.get(["/api/download/run_bridge.bat", "/api/download/start.bat"], (req, res) => {
     const token = ((req.query.token as string) || "default_agent_token").trim();
-    const harnessUrl = ((req.query.harnessUrl as string) || "http://127.0.0.1:3080").trim();
+    const harnessUrl = ((req.query.harnessUrl as string) || "http://127.0.0.1:3081").trim();
     
     // Determine host URL
     const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
@@ -1379,6 +1391,17 @@ if %errorlevel% neq 0 (
         error: err.message
       });
     }
+  });
+
+  // Reset user active session
+  app.post("/api/agent/reset-session", (req, res) => {
+    const { userId, token } = req.body || {};
+    const targetToken = (token || "").trim() || "default_agent_token";
+    const agent = connectedAgents.get(targetToken);
+    if (agent && agent.activeUserSessions && userId) {
+      agent.activeUserSessions.delete(userId);
+    }
+    res.json({ success: true });
   });
 
   // Create new session in local DeepSeek Harness via bridge
@@ -1635,7 +1658,7 @@ if %errorlevel% neq 0 (
     try {
       const token = (req.query.token as string)?.trim() || "default_agent_token";
       const serverUrl = (req.query.server as string)?.trim() || "https://lx00924ai.top";
-      const harnessUrl = (req.query.harness as string)?.trim() || "http://127.0.0.1:3080";
+      const harnessUrl = (req.query.harness as string)?.trim() || "http://127.0.0.1:3081";
       const batContent = `@echo off
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8

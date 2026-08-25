@@ -106,7 +106,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
       asrModel: raw.asrModel?.trim() || '',
       asrApiKey: raw.asrApiKey?.trim() || '',
       agentToken: (raw.agentToken || '').trim() || 'default_agent_token',
-      agentHarnessUrl: (raw.agentHarnessUrl || '').trim() || 'http://127.0.0.1:3080',
+      agentHarnessUrl: (raw.agentHarnessUrl || '').trim() || 'http://127.0.0.1:3081',
       agentSessionId: raw.agentSessionId?.trim() || '',
       agentWorkspace: (raw.agentWorkspace || '').trim() || 'deepseek-agent',
       backgroundOpacity: validOpacity
@@ -139,7 +139,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   // Helper to normalize harness URL to always have http:// (or https://)
   const getNormalizedHarnessUrl = React.useCallback((inputUrl?: string) => {
     let raw = (inputUrl || '').trim();
-    if (!raw) return 'http://127.0.0.1:3080';
+    if (!raw) return 'http://127.0.0.1:3081';
     if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
       raw = `http://${raw}`;
     }
@@ -2510,7 +2510,7 @@ if %errorlevel% neq 0 (
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 text-[11px] px-2 py-0"
+                  className="h-7 text-[11px] px-2 py-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   onClick={() => {
                     updateAndSave({
                       funasrHttpEndpoint: 'api.siliconflow.cn',
@@ -2524,7 +2524,7 @@ if %errorlevel% neq 0 (
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 text-[11px] px-2 py-0"
+                  className="h-7 text-[11px] px-2 py-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   onClick={() => {
                     updateAndSave({
                       funasrHttpEndpoint: 'api.groq.com',
@@ -2538,7 +2538,7 @@ if %errorlevel% neq 0 (
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 text-[11px] px-2 py-0"
+                  className="h-7 text-[11px] px-2 py-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   onClick={() => {
                     updateAndSave({
                       funasrHttpEndpoint: 'api.openai.com',
@@ -2552,7 +2552,7 @@ if %errorlevel% neq 0 (
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 text-[11px] px-2 py-0"
+                  className="h-7 text-[11px] px-2 py-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   onClick={() => {
                     updateAndSave({
                       funasrHttpEndpoint: 'dashscope.aliyuncs.com',
@@ -2566,7 +2566,7 @@ if %errorlevel% neq 0 (
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="h-7 text-[11px] px-2 py-0"
+                  className="h-7 text-[11px] px-2 py-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   onClick={() => {
                     updateAndSave({
                       funasrHttpEndpoint: '192.168.1.100:10095',
@@ -2598,7 +2598,7 @@ if %errorlevel% neq 0 (
                     size="sm" 
                     onClick={handleTestHttp} 
                     disabled={isTestingHttp || !localSettings.funasrHttpEndpoint}
-                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0"
+                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   >
                     {isTestingHttp ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                     测试
@@ -2663,7 +2663,7 @@ if %errorlevel% neq 0 (
                     size="sm" 
                     onClick={handleTestWs} 
                     disabled={isTestingWs || !localSettings.funasrWsEndpoint}
-                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0"
+                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   >
                     {isTestingWs ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                     测试
@@ -2792,7 +2792,7 @@ if %errorlevel% neq 0 (
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0"
+                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                     title="重置并注销旧设备"
                     disabled={isRevokingToken}
                     onClick={handleRevokeAndResetToken}
@@ -2804,7 +2804,7 @@ if %errorlevel% neq 0 (
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0"
+                    className="h-8 px-2 text-xs flex items-center gap-1 shrink-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                     title="复制 Token"
                     onClick={async () => {
                       const t = localSettings.agentToken || 'default_agent_token';
@@ -2851,19 +2851,19 @@ if %errorlevel% neq 0 (
                         setLocalSettings(prev => {
                           const next = {
                             ...prev,
-                            agentHarnessUrl: cleanHost ? `http://${cleanHost}` : 'http://127.0.0.1:3080'
+                            agentHarnessUrl: cleanHost ? `http://${cleanHost}` : 'http://127.0.0.1:3081'
                           };
                           localSettingsRef.current = next;
                           return next;
                         });
                       }}
                       onBlur={handleBlur}
-                      placeholder="127.0.0.1:3080"
+                      placeholder="127.0.0.1:3081"
                       className="h-8 text-xs font-mono rounded-l-none border-l-0"
                     />
                   </div>
                   <span className="text-[10px] text-muted-foreground mt-1 block">
-                    默认: <code>127.0.0.1:3080</code> (协议头 <code>http://</code> 已在后台自动注入)
+                    默认: <code>127.0.0.1:3081</code> (协议头 <code>http://</code> 已在后台自动注入)
                   </span>
                 </div>
               </div>
@@ -2882,7 +2882,7 @@ if %errorlevel% neq 0 (
                       size="sm"
                       onClick={() => fetchAgentSessions()}
                       disabled={isLoadingSessions}
-                      className="h-6 px-2 text-[10px] flex items-center gap-1 shrink-0"
+                      className="h-6 px-2 text-[10px] flex items-center gap-1 shrink-0 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                       title="从本地 DSH 刷新工作区和会话列表"
                     >
                       <RefreshCw className={cn("w-3 h-3", isLoadingSessions && "animate-spin text-primary")} />
@@ -2893,7 +2893,7 @@ if %errorlevel% neq 0 (
                       variant="default"
                       size="sm"
                       onClick={() => setShowNewSessionInput(!showNewSessionInput)}
-                      className="h-6 px-2 text-[10px] flex items-center gap-1 bg-primary text-primary-foreground shrink-0 shadow-xs"
+                      className="h-6 px-2 text-[10px] flex items-center gap-1 bg-primary text-primary-foreground shrink-0 shadow-xs transition-colors hover:bg-primary/80"
                       title="在本地 DSH 立即创建一个全新对话"
                     >
                       <Plus className="w-3 h-3" />
@@ -3039,7 +3039,7 @@ if %errorlevel% neq 0 (
                       variant="outline"
                       size="sm"
                       onClick={handleDownloadBridgePy}
-                      className="h-6 px-2 text-[10px] text-primary hover:bg-primary/10 border-primary/30 flex items-center gap-1 font-medium"
+                      className="h-6 px-2 text-[10px] text-primary border-primary/30 flex items-center gap-1 font-medium transition-all hover:bg-primary/20 hover:brightness-110 hover:shadow-xs active:scale-95"
                       title="下载已预填好配置的 Python 桥接脚本"
                     >
                       <Download className="w-3 h-3" />
@@ -3050,7 +3050,7 @@ if %errorlevel% neq 0 (
                       variant="outline"
                       size="sm"
                       onClick={handleDownloadStartBat}
-                      className="h-6 px-2 text-[10px] text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 border-emerald-500/30 flex items-center gap-1 font-medium"
+                      className="h-6 px-2 text-[10px] text-emerald-600 dark:text-emerald-400 border-emerald-500/30 flex items-center gap-1 font-medium transition-colors hover:bg-emerald-500/15 hover:border-emerald-500/50 active:scale-95"
                       title="Windows 双击直接运行（自动安装依赖）"
                     >
                       <Download className="w-3 h-3" />
@@ -3066,7 +3066,7 @@ if %errorlevel% neq 0 (
                         setCopiedDownloadUrl(true);
                         setTimeout(() => setCopiedDownloadUrl(false), 2000);
                       }}
-                      className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      className="h-6 px-2 text-[10px] text-muted-foreground flex items-center gap-1 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                       title="复制真实 HTTP 下载直链（可在手机浏览器或电脑端直接粘贴下载）"
                     >
                       {copiedDownloadUrl ? <Check className="w-3 h-3 text-emerald-500" /> : <Link className="w-3 h-3" />}
@@ -3077,7 +3077,7 @@ if %errorlevel% neq 0 (
                       variant="ghost"
                       size="sm"
                       onClick={() => setShowCodeModal(true)}
-                      className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      className="h-6 px-2 text-[10px] text-muted-foreground flex items-center gap-1 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                     >
                       <Copy className="w-3 h-3" />
                       查看/复制代码
@@ -3093,7 +3093,7 @@ if %errorlevel% neq 0 (
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="absolute top-1.5 right-1.5 h-6 px-2 text-[10px] bg-background/80 hover:bg-background border border-border/50 flex items-center gap-1"
+                    className="absolute top-1.5 right-1.5 h-6 px-2 text-[10px] bg-background/80 border border-border/50 flex items-center gap-1 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                     onClick={async () => {
                       const cmd = `python deepseek_bridge.py --token "${localSettings.agentToken || 'default_agent_token'}" --server "${currentOrigin}" --harness-url "${normalizedHarnessUrl}"`;
                       await navigator.clipboard.writeText(cmd);
@@ -3362,7 +3362,7 @@ if %errorlevel% neq 0 (
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-8 text-xs gap-1.5"
+                  className="h-8 text-xs gap-1.5 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                   onClick={() => copyLogsToClipboard()}
                 >
                   <Copy className="w-3.5 h-3.5" />
@@ -3418,7 +3418,7 @@ if %errorlevel% neq 0 (
                     setCopiedFullCode(true);
                     setTimeout(() => setCopiedFullCode(false), 2000);
                   }}
-                  className="h-8 text-xs flex items-center gap-1.5"
+                  className="h-8 text-xs flex items-center gap-1.5 transition-colors hover:bg-primary/10 hover:text-primary hover:border-primary/40"
                 >
                   {copiedFullCode ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                   {copiedFullCode ? '已复制代码' : '一键复制代码'}

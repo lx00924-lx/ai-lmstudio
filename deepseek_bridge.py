@@ -13,7 +13,7 @@ DeepSeek Harness 本地安全反向桥接客户端 (DeepSeek Bridge v3.6 - 工�
 
 预填默认参数：
   • 调度服务器: https://lx00924ai.top
-  • Harness地址: http://127.0.0.1:3080 (默认 3080/v1)
+  • Harness地址: http://127.0.0.1:3081 (默认 3081/v1)
 
 使用方式：
     pip install requests websockets
@@ -118,7 +118,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.6")
     parser.add_argument("--token", type=str, default=os.getenv("AGENT_TOKEN", ""), help="App 中生成的配对 Token")
     parser.add_argument("--server", type=str, default=os.getenv("SERVER_URL", "https://lx00924ai.top"), help="App 调度服务器地址 (默认: https://lx00924ai.top)")
-    parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "http://127.0.0.1:3080"), help="本地 DeepSeek Harness / Agent 服务地址 (默认: http://127.0.0.1:3080)")
+    parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "http://127.0.0.1:3081"), help="本地 DeepSeek Harness / Agent 服务地址 (默认: http://127.0.0.1:3081)")
     parser.add_argument("--harness-model", type=str, default=os.getenv("HARNESS_MODEL", "deepseek-chat"), help="本地 DeepSeek 模型名称 (默认: deepseek-chat)")
     parser.add_argument("--chat-api-url", type=str, default=os.getenv("CHAT_API_URL", ""), help="可选：独立云端聊天推理接口 (如火山方舟 https://ark.cn-beijing.volces.com/api/v3)")
     parser.add_argument("--chat-api-key", type=str, default=os.getenv("CHAT_API_KEY", ""), help="可选：云端聊天 API Key")
@@ -683,12 +683,22 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
                 continue
 
     endpoints = [
+        (f"{harness_base}/v1/sessions", "GET", None),
         (f"{harness_base}/api/sessions", "GET", None),
+        (f"{harness_base}/v1/chat/sessions", "GET", None),
         (f"{harness_base}/api/workspaces", "GET", None),
         (f"{harness_base}/api/v1/sessions", "GET", None),
         (f"{harness_base}/api/session.list", "POST", rpc_list_payload),
         (f"{harness_base}/api/session.list", "POST", rpc_list_ws_payload),
     ]
+
+    # Also test 3081 adapter if harness_url is 3080/3081
+    adapter_base = harness_base
+    if "3080" in harness_base:
+        adapter_base = harness_base.replace("3080", "3081")
+    if adapter_base != harness_base:
+        endpoints.insert(0, (f"{adapter_base}/v1/sessions", "GET", None))
+        endpoints.insert(1, (f"{adapter_base}/api/sessions", "GET", None))
 
     for ep, mth, pld in endpoints:
         def do_req(url=ep, method=mth, data_dict=pld):
@@ -1323,7 +1333,7 @@ async def run_bridge_client(args):
     print(f" • 配对 Token     : \033[96m{token}\033[0m")
     print(f" • App 调度服务器 : \033[94m{server_base}\033[0m")
     print(f" • 网络连接模式   : \033[95m{proxy_mode_desc}\033[0m")
-    print(f" • 本地 Harness   : \033[93m{args.harness_url}\033[0m (默认 3080/v1)")
+    print(f" • 本地 Harness   : \033[93m{args.harness_url}\033[0m (默认 3081/v1)")
     print(f" • 本地模型       : {args.harness_model}")
     print(f" • 最大并发任务   : {concurrency_limit}")
     print(f" • Python 运行环境: {sys.version.split()[0]} ({sys.platform})")
