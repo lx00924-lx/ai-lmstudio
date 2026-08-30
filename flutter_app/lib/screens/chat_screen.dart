@@ -1,0 +1,225 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../models/app_settings.dart';
+import '../models/chat_session.dart';
+import '../providers/chat_provider.dart';
+import '../providers/settings_provider.dart';
+import '../widgets/chat_input_bar.dart';
+import '../widgets/message_bubble.dart';
+import 'settings_screen.dart';
+
+class ChatScreen extends StatelessWidget {
+  const ChatScreen({super.key});
+
+  void _showModelSelector(BuildContext context) {
+    final settingsProvider = context.read<SettingsProvider>();
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                  child: Text(
+                    '选择对话模型',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                ...AppSettings.availableModels.map((model) {
+                  final isSelected = settingsProvider.activeModel == model.id;
+                  return ListTile(
+                    leading: Icon(
+                      model.isReasoner ? Icons.psychology : Icons.bolt,
+                      color: isSelected ? const Color(0xFF0284C7) : null,
+                    ),
+                    title: Text(
+                      model.name,
+                      style: TextStyle(
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected ? const Color(0xFF0284C7) : null,
+                      ),
+                    ),
+                    subtitle: Text(model.description),
+                    trailing: isSelected
+                        ? const Icon(Icons.check, color: Color(0xFF0284C7))
+                        : null,
+                    onTap: () {
+                      settingsProvider.updateModel(model.id);
+                      Navigator.pop(ctx);
+                    },
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chat = context.watch<ChatProvider>();
+    final settings = context.watch<SettingsProvider>();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: InkWell(
+          onTap: () => _showModelSelector(context),
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  settings.activeModel == 'deepseek-reasoner'
+                      ? 'DeepSeek-R1 (深度思考)'
+                      : 'DeepSeek-V3 (极速)',
+                ),
+                const Icon(Icons.keyboard_arrow_down, size: 20),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: '新建对话',
+            onPressed: () => chat.createNewSession(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '系统设置',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
+          ),
+        ],
+      ),
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    const Icon(Icons.chat_bubble_outline, color: Color(0xFF0284C7)),
+                    const SizedBox(width: 12),
+                    const Text(
+                      '历史对话',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.add),
+                      onPressed: () {
+                        chat.createNewSession();
+                        Navigator.pop(context);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: chat.sessions.length,
+                  itemBuilder: (ctx, index) {
+                    final session = chat.sessions[index];
+                    final isSelected = chat.currentSession?.id == session.id;
+
+                    return ListTile(
+                      selected: isSelected,
+                      selectedTileColor: isDark
+                          ? const Color(0xFF1E293B)
+                          : const Color(0xFFE0F2FE),
+                      title: Text(
+                        session.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 18),
+                        onPressed: () => chat.deleteSession(session.id),
+                      ),
+                      onTap: () {
+                        chat.selectSession(session);
+                        Navigator.pop(context);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: chat.messages.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF0284C7), Color(0xFF2563EB)],
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Icon(Icons.auto_awesome, color: Colors.white, size: 36),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          '随时向 DeepSeek 提问',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          '原生 Flutter 驱动 · 支持超长思考链 · 毫秒级流式响应',
+                          style: TextStyle(
+                            color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    itemCount: chat.messages.length,
+                    itemBuilder: (ctx, index) {
+                      return MessageBubble(message: chat.messages[index]);
+                    },
+                  ),
+          ),
+          ChatInputBar(
+            onSend: (text) => chat.sendMessage(text),
+            onStop: () => chat.stopGeneration(),
+            isGenerating: chat.isGenerating,
+          ),
+        ],
+      ),
+    );
+  }
+}
