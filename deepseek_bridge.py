@@ -1040,31 +1040,50 @@ async def execute_local_harness(
     if not content_list:
         content_list = [{"type": "text", "text": str(prompt or "")}]
 
-    # 1. 优先尝试本地 3081 HTTP 适配器 (用户在 DSH 运行的 Node 适配服务)
+    # 1. 优先尝试本地 3081 HTTP 适配器 (用户在 DSH 运行的 dsh-rest-adapter Node 适配服务)
     adapter_base = harness_base
     if "3080" in harness_base:
         adapter_base = harness_base.replace("3080", "3081")
 
     candidate_endpoints = []
     
-    # 3081 适配器候选接口
-    if "3081" in adapter_base or "3080" in harness_base:
-        candidate_endpoints.append((f"{adapter_base}/v1/chat/completions", {
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}],
-            "stream": False
-        }, "DSH 3081 HTTP 适配器 (/v1/chat/completions)"))
-        candidate_endpoints.append((f"{adapter_base}/v1/agent/prompt", {
-            "prompt": prompt,
-            "sessionId": active_session_id,
-            "workspace": target_workspace,
-            "model": model_name or "deepseek-chat"
-        }, "DSH 3081 HTTP 适配器 (/v1/agent/prompt)"))
-        candidate_endpoints.append((f"{adapter_base}/api/session.prompt", {
-            "prompt": prompt,
-            "sessionId": active_session_id,
-            "workspace": target_workspace
-        }, "DSH 3081 HTTP 适配器 (/api/session.prompt)"))
+    # 构造规范的 sessionId（过滤占位符）
+    real_session_id = None
+    if active_session_id and active_session_id not in ("__auto__", "__auto_new__", "default_session", "none", "null"):
+        real_session_id = active_session_id
+
+    # 3081 适配器候选接口（形态 B: /v1/chat/completions 与 形态 A: /v1/agent/prompt）
+    chat_completion_payload = {
+        "model": model_name or "deepseek-chat",
+        "messages": messages if messages else [{"role": "user", "content": prompt}],
+        "stream": False
+    }
+    if real_session_id:
+        chat_completion_payload["sessionId"] = real_session_id
+
+    prompt_payload = {
+        "prompt": prompt or (messages[-1].get("content", "") if messages else ""),
+        "workspace": target_workspace,
+        "model": model_name or "deepseek-chat"
+    }
+    if real_session_id:
+        prompt_payload["sessionId"] = real_session_id
+
+    candidate_endpoints.append((
+        f"{adapter_base}/v1/chat/completions",
+        chat_completion_payload,
+        "DSH 3081 HTTP 适配器 (/v1/chat/completions)"
+    ))
+    candidate_endpoints.append((
+        f"{adapter_base}/v1/agent/prompt",
+        prompt_payload,
+        "DSH 3081 HTTP 适配器 (/v1/agent/prompt)"
+    ))
+    candidate_endpoints.append((
+        f"{adapter_base}/api/session.prompt",
+        prompt_payload,
+        "DSH 3081 HTTP 适配器 (/api/session.prompt)"
+    ))
 
     # 2. 原生 WebSocket 通道
     if HAS_WEBSOCKETS and not harness_base.startswith("https://"):
@@ -1110,7 +1129,7 @@ async def execute_local_harness(
                 headers["Authorization"] = f"Bearer {auth_key}"
 
             req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=120) as response:
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=600) as response:
                 return response.read().decode("utf-8")
 
         try:
@@ -1125,13 +1144,27 @@ async def execute_local_harness(
                         last_err = json.dumps(err_detail, ensure_ascii=False)
                         continue
 
-                    # 提取文本结果
-                    txt = extract_text_from_obj(resp_json)
-                    if txt and not is_html_content(txt):
-                        output_content = txt
+                    # 1. 优先提取 dsh-rest-adapter 或标准接口的 result 字段
+                    if "result" in resp_json and resp_json["result"]:
+                        res_val = resp_json["result"]
+                        if isinstance(res_val, str) and not is_html_content(res_val):
+                            output_content = res_val
+                        elif isinstance(res_val, dict) or isinstance(res_val, list):
+                            extracted = extract_text_from_obj(res_val)
+                            if extracted and not is_html_content(extracted):
+                                output_content = extracted
 
+                    # 2. 提取 choices 标准返回
                     if output_content is None and "choices" in resp_json and len(resp_json["choices"]) > 0:
-                        output_content = resp_json["choices"][0].get("message", {}).get("content", "")
+                        choice_msg = resp_json["choices"][0].get("message", {})
+                        if isinstance(choice_msg, dict) and choice_msg.get("content"):
+                            output_content = choice_msg.get("content", "")
+
+                    # 3. 通用递归提取
+                    if output_content is None:
+                        txt = extract_text_from_obj(resp_json)
+                        if txt and not is_html_content(txt):
+                            output_content = txt
                 else:
                     output_content = str(resp_json)
             except Exception:

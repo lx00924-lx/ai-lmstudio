@@ -54,7 +54,7 @@ class DeepSeekNativeApp extends StatelessWidget {
         brightness: Brightness.light,
         colorSchemeSeed: const Color(0xFF0284C7), // 现代化科技蓝
         scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-        cardTheme: const CardTheme(
+        cardTheme: const CardThemeData(
           color: Colors.white,
           elevation: 0,
           shape: RoundedRectangleBorder(
@@ -79,7 +79,7 @@ class DeepSeekNativeApp extends StatelessWidget {
         brightness: Brightness.dark,
         colorSchemeSeed: const Color(0xFF38BDF8),
         scaffoldBackgroundColor: const Color(0xFF0F172A),
-        cardTheme: const CardTheme(
+        cardTheme: const CardThemeData(
           color: Color(0xFF1E293B),
           elevation: 0,
           shape: RoundedRectangleBorder(
