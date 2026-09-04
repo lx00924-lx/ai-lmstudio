@@ -80,6 +80,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showDebugFloatButton: true,
   chatFontSize: 'base',
   agentHarnessUrl: 'http://127.0.0.1:3081',
+  contextLength: 15000,
 };
 
 // Storage key helpers for local-first persistence

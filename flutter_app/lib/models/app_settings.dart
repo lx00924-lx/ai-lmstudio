@@ -1,112 +1,293 @@
 import 'dart:convert';
+import 'package:uuid/uuid.dart';
 
-class ModelConfig {
+/// 单个 API 模型端点配置（卡片项）
+class ApiModelEndpoint {
   final String id;
-  final String name;
-  final String provider; // 'deepseek', 'openai', 'anthropic', 'custom'
-  final bool isReasoner;
-  final String description;
-
-  const ModelConfig({
-    required this.id,
-    required this.name,
-    required this.provider,
-    this.isReasoner = false,
-    this.description = '',
-  });
-}
-
-class AppSettings {
-  bool isDarkMode;
-  String activeModel;
-  String deepSeekApiKey;
-  String customBaseUrl;
-  String customApiKey;
+  String cardName; // 卡片展示名称，默认为模型名，可自定义
+  String endpoint; // API 终端 URL，例如 https://api.deepseek.com
+  String apiKey; // API Key
+  String modelName; // 模型名称，例如 deepseek-chat 或 ep-xxx
+  int contextLength; // 该 API 专属上下文长度，超出滑动截断
   double temperature;
   int maxTokens;
-  bool enableReasoning;
-  bool enableStream;
-  String localBridgeWsUrl;
-  String localAgentToken;
+  bool isEnabled;
+
+  ApiModelEndpoint({
+    String? id,
+    required this.cardName,
+    required this.endpoint,
+    required this.apiKey,
+    required this.modelName,
+    this.contextLength = 15000,
+    this.temperature = 0.6,
+    this.maxTokens = 4096,
+    this.isEnabled = true,
+  }) : id = id ?? const Uuid().v4();
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'cardName': cardName,
+      'endpoint': endpoint,
+      'apiKey': apiKey,
+      'modelName': modelName,
+      'contextLength': contextLength,
+      'temperature': temperature,
+      'maxTokens': maxTokens,
+      'isEnabled': isEnabled,
+    };
+  }
+
+  factory ApiModelEndpoint.fromMap(Map<dynamic, dynamic> map) {
+    return ApiModelEndpoint(
+      id: map['id']?.toString(),
+      cardName: map['cardName']?.toString() ?? '默认模型',
+      endpoint: map['endpoint']?.toString() ?? 'https://api.deepseek.com',
+      apiKey: map['apiKey']?.toString() ?? '',
+      modelName: map['modelName']?.toString() ?? 'deepseek-chat',
+      contextLength: (map['contextLength'] as num?)?.toInt() ?? 15000,
+      temperature: (map['temperature'] as num?)?.toDouble() ?? 0.6,
+      maxTokens: (map['maxTokens'] as num?)?.toInt() ?? 4096,
+      isEnabled: map['isEnabled'] as bool? ?? true,
+    );
+  }
+}
+
+/// 完整应用设置
+class AppSettings {
+  // --- 系统与界面基础 ---
+  bool isDarkMode;
+  String activeEndpointId; // 当前选中的 ApiModelEndpoint id
+  String activeModelDisplayName; // 当前主界面展示的模型名称
+
+  // --- 1. 账户设置 ---
+  String loginAccount;
+  String userName;
+  String userAvatar; // Base64 或本地图片路径
+  String aiName;
+  String aiAvatar; // Base64 或本地图片路径
+  String accountPassword;
+
+  // --- 2. 个性化设置 ---
+  String customBackground; // 背景图片路径或 Base64
+  int backgroundOpacity; // 0 - 100
+  bool showBackgroundInDarkMode;
+  int chatFontSize; // 13 (小), 15 (标准), 16 (大), 18 (特大)
+  
+  // 启动页设置
+  bool enableSplash;
+  String splashTitle;
+  String splashSubtitle;
+  int splashDurationMs; // 毫秒
+  String splashImage;
+  
+  // 回复逻辑 (System Prompt)
+  String systemPrompt;
+
+  // --- 3. 大模型 API 卡片列表 ---
+  List<ApiModelEndpoint> apiEndpoints;
+
+  // --- 4. 语音转写设置 (ASR) ---
+  String asrProvider; // 'siliconflow', 'groq', 'openai', 'aliyun', 'funasr'
+  String asrHttpEndpoint;
+  String asrWsEndpoint;
+  String asrModel;
+  String asrApiKey;
+  int asrContextLength;
+
+  // --- 5. DeepSeek Harness (本地电脑 Agent 桥接) ---
+  bool defaultAgentMode;
+  String harnessToken;
+  String harnessServiceUrl; // 默认 http://127.0.0.1:3081
   String targetWorkspace;
+  String targetSessionId;
+  bool isHarnessOnline;
+
+  // --- 直接展示项 ---
+  String githubOwner;
+  String githubRepo;
+  String customDataPath;
+  bool showDebugFab;
 
   AppSettings({
     this.isDarkMode = false,
-    this.activeModel = 'deepseek-reasoner',
-    this.deepSeekApiKey = '',
-    this.customBaseUrl = 'https://api.deepseek.com',
-    this.customApiKey = '',
-    this.temperature = 0.6,
-    this.maxTokens = 4096,
-    this.enableReasoning = true,
-    this.enableStream = true,
-    this.localBridgeWsUrl = 'ws://127.0.0.1:8765',
-    this.localAgentToken = 'lx_agent_token_888',
+    this.activeEndpointId = '',
+    this.activeModelDisplayName = 'DeepSeek-V3',
+    // 账户
+    this.loginAccount = '123',
+    this.userName = '用户',
+    this.userAvatar = '',
+    this.aiName = 'Aether-X',
+    this.aiAvatar = '',
+    this.accountPassword = '',
+    // 个性化
+    this.customBackground = '',
+    this.backgroundOpacity = 100,
+    this.showBackgroundInDarkMode = true,
+    this.chatFontSize = 15,
+    this.enableSplash = true,
+    this.splashTitle = 'Aether-X',
+    this.splashSubtitle = 'Loading AI Experience',
+    this.splashDurationMs = 1000,
+    this.splashImage = '',
+    this.systemPrompt = '你是一个专业、诚实、乐于助人的 AI 助手。',
+    // API 端点列表
+    List<ApiModelEndpoint>? apiEndpoints,
+    // ASR
+    this.asrProvider = 'siliconflow',
+    this.asrHttpEndpoint = 'https://api.siliconflow.cn/v1/audio/transcriptions',
+    this.asrWsEndpoint = '',
+    this.asrModel = 'FunAudioLLM/SenseVoiceSmall',
+    this.asrApiKey = '',
+    this.asrContextLength = 30000,
+    // Harness
+    this.defaultAgentMode = false,
+    this.harnessToken = 'agent_030efh_eg0z',
+    this.harnessServiceUrl = 'http://127.0.0.1:3081',
     this.targetWorkspace = 'deepseek-agent',
-  });
+    this.targetSessionId = '',
+    this.isHarnessOnline = false,
+    // 辅助
+    this.githubOwner = 'LX00924-LX',
+    this.githubRepo = 'ai-lmstudio',
+    this.customDataPath = '',
+    this.showDebugFab = false,
+  }) : apiEndpoints = apiEndpoints ?? [
+          ApiModelEndpoint(
+            id: 'default-deepseek-v3',
+            cardName: 'DeepSeek-V3',
+            endpoint: 'https://api.deepseek.com',
+            apiKey: '',
+            modelName: 'deepseek-chat',
+            contextLength: 15000,
+          ),
+          ApiModelEndpoint(
+            id: 'default-deepseek-r1',
+            cardName: 'DeepSeek-R1',
+            endpoint: 'https://api.deepseek.com',
+            apiKey: '',
+            modelName: 'deepseek-reasoner',
+            contextLength: 15000,
+          ),
+        ];
 
-  static const List<ModelConfig> availableModels = [
-    ModelConfig(
-      id: 'deepseek-reasoner',
-      name: 'DeepSeek-R1 (深度思考)',
-      provider: 'deepseek',
-      isReasoner: true,
-      description: '具备超长思维链与自省推理能力，数理代码极强',
-    ),
-    ModelConfig(
-      id: 'deepseek-chat',
-      name: 'DeepSeek-V3 (通用极速)',
-      provider: 'deepseek',
-      isReasoner: false,
-      description: '百万上下文高吞吐，通用对话与快速问答首选',
-    ),
-    ModelConfig(
-      id: 'gpt-4o',
-      name: 'GPT-4o Omni',
-      provider: 'openai',
-      isReasoner: false,
-      description: 'OpenAI 旗舰全模态智能模型',
-    ),
-    ModelConfig(
-      id: 'claude-3-5-sonnet-20241022',
-      name: 'Claude 3.5 Sonnet',
-      provider: 'anthropic',
-      isReasoner: false,
-      description: '代码工程与长篇写作卓越表现',
-    ),
-  ];
+  ApiModelEndpoint? get activeEndpoint {
+    if (apiEndpoints.isEmpty) return null;
+    final found = apiEndpoints.where((e) => e.id == activeEndpointId);
+    if (found.isNotEmpty) return found.first;
+    return apiEndpoints.first;
+  }
 
   Map<String, dynamic> toMap() {
     return {
       'isDarkMode': isDarkMode,
-      'activeModel': activeModel,
-      'deepSeekApiKey': deepSeekApiKey,
-      'customBaseUrl': customBaseUrl,
-      'customApiKey': customApiKey,
-      'temperature': temperature,
-      'maxTokens': maxTokens,
-      'enableReasoning': enableReasoning,
-      'enableStream': enableStream,
-      'localBridgeWsUrl': localBridgeWsUrl,
-      'localAgentToken': localAgentToken,
+      'activeEndpointId': activeEndpointId,
+      'activeModelDisplayName': activeModelDisplayName,
+      'loginAccount': loginAccount,
+      'userName': userName,
+      'userAvatar': userAvatar,
+      'aiName': aiName,
+      'aiAvatar': aiAvatar,
+      'accountPassword': accountPassword,
+      'customBackground': customBackground,
+      'backgroundOpacity': backgroundOpacity,
+      'showBackgroundInDarkMode': showBackgroundInDarkMode,
+      'chatFontSize': chatFontSize,
+      'enableSplash': enableSplash,
+      'splashTitle': splashTitle,
+      'splashSubtitle': splashSubtitle,
+      'splashDurationMs': splashDurationMs,
+      'splashImage': splashImage,
+      'systemPrompt': systemPrompt,
+      'apiEndpoints': apiEndpoints.map((e) => e.toMap()).toList(),
+      'asrProvider': asrProvider,
+      'asrHttpEndpoint': asrHttpEndpoint,
+      'asrWsEndpoint': asrWsEndpoint,
+      'asrModel': asrModel,
+      'asrApiKey': asrApiKey,
+      'asrContextLength': asrContextLength,
+      'defaultAgentMode': defaultAgentMode,
+      'harnessToken': harnessToken,
+      'harnessServiceUrl': harnessServiceUrl,
       'targetWorkspace': targetWorkspace,
+      'targetSessionId': targetSessionId,
+      'isHarnessOnline': isHarnessOnline,
+      'githubOwner': githubOwner,
+      'githubRepo': githubRepo,
+      'customDataPath': customDataPath,
+      'showDebugFab': showDebugFab,
     };
   }
 
   factory AppSettings.fromMap(Map<dynamic, dynamic> map) {
+    List<ApiModelEndpoint> endpoints = [];
+    if (map['apiEndpoints'] is List) {
+      endpoints = (map['apiEndpoints'] as List)
+          .map((item) => ApiModelEndpoint.fromMap(item as Map))
+          .toList();
+    }
+    if (endpoints.isEmpty) {
+      endpoints = [
+        ApiModelEndpoint(
+          id: 'default-deepseek-v3',
+          cardName: 'DeepSeek-V3',
+          endpoint: 'https://api.deepseek.com',
+          apiKey: '',
+          modelName: 'deepseek-chat',
+          contextLength: 15000,
+        ),
+        ApiModelEndpoint(
+          id: 'default-deepseek-r1',
+          cardName: 'DeepSeek-R1',
+          endpoint: 'https://api.deepseek.com',
+          apiKey: '',
+          modelName: 'deepseek-reasoner',
+          contextLength: 15000,
+        ),
+      ];
+    }
+
+    final activeId = map['activeEndpointId']?.toString() ?? endpoints.first.id;
+    final activeEp = endpoints.firstWhere((e) => e.id == activeId, orElse: () => endpoints.first);
+
     return AppSettings(
       isDarkMode: map['isDarkMode'] as bool? ?? false,
-      activeModel: map['activeModel'] as String? ?? 'deepseek-reasoner',
-      deepSeekApiKey: map['deepSeekApiKey'] as String? ?? '',
-      customBaseUrl: map['customBaseUrl'] as String? ?? 'https://api.deepseek.com',
-      customApiKey: map['customApiKey'] as String? ?? '',
-      temperature: (map['temperature'] as num?)?.toDouble() ?? 0.6,
-      maxTokens: map['maxTokens'] as int? ?? 4096,
-      enableReasoning: map['enableReasoning'] as bool? ?? true,
-      enableStream: map['enableStream'] as bool? ?? true,
-      localBridgeWsUrl: map['localBridgeWsUrl'] as String? ?? 'ws://127.0.0.1:8765',
-      localAgentToken: map['localAgentToken'] as String? ?? 'lx_agent_token_888',
-      targetWorkspace: map['targetWorkspace'] as String? ?? 'deepseek-agent',
+      activeEndpointId: activeId,
+      activeModelDisplayName: map['activeModelDisplayName']?.toString() ?? activeEp.cardName,
+      loginAccount: map['loginAccount']?.toString() ?? '123',
+      userName: map['userName']?.toString() ?? '用户',
+      userAvatar: map['userAvatar']?.toString() ?? '',
+      aiName: map['aiName']?.toString() ?? 'Aether-X',
+      aiAvatar: map['aiAvatar']?.toString() ?? '',
+      accountPassword: map['accountPassword']?.toString() ?? '',
+      customBackground: map['customBackground']?.toString() ?? '',
+      backgroundOpacity: (map['backgroundOpacity'] as num?)?.toInt() ?? 100,
+      showBackgroundInDarkMode: map['showBackgroundInDarkMode'] as bool? ?? true,
+      chatFontSize: (map['chatFontSize'] as num?)?.toInt() ?? 15,
+      enableSplash: map['enableSplash'] as bool? ?? true,
+      splashTitle: map['splashTitle']?.toString() ?? 'Aether-X',
+      splashSubtitle: map['splashSubtitle']?.toString() ?? 'Loading AI Experience',
+      splashDurationMs: (map['splashDurationMs'] as num?)?.toInt() ?? 1000,
+      splashImage: map['splashImage']?.toString() ?? '',
+      systemPrompt: map['systemPrompt']?.toString() ?? '你是一个专业、诚实、乐于助人的 AI 助手。',
+      apiEndpoints: endpoints,
+      asrProvider: map['asrProvider']?.toString() ?? 'siliconflow',
+      asrHttpEndpoint: map['asrHttpEndpoint']?.toString() ?? 'https://api.siliconflow.cn/v1/audio/transcriptions',
+      asrWsEndpoint: map['asrWsEndpoint']?.toString() ?? '',
+      asrModel: map['asrModel']?.toString() ?? 'FunAudioLLM/SenseVoiceSmall',
+      asrApiKey: map['asrApiKey']?.toString() ?? '',
+      asrContextLength: (map['asrContextLength'] as num?)?.toInt() ?? 30000,
+      defaultAgentMode: map['defaultAgentMode'] as bool? ?? false,
+      harnessToken: map['harnessToken']?.toString() ?? 'agent_030efh_eg0z',
+      harnessServiceUrl: map['harnessServiceUrl']?.toString() ?? 'http://127.0.0.1:3081',
+      targetWorkspace: map['targetWorkspace']?.toString() ?? 'deepseek-agent',
+      targetSessionId: map['targetSessionId']?.toString() ?? '',
+      isHarnessOnline: map['isHarnessOnline'] as bool? ?? false,
+      githubOwner: map['githubOwner']?.toString() ?? 'LX00924-LX',
+      githubRepo: map['githubRepo']?.toString() ?? 'ai-lmstudio',
+      customDataPath: map['customDataPath']?.toString() ?? '',
+      showDebugFab: map['showDebugFab'] as bool? ?? false,
     );
   }
 }

@@ -40,7 +40,7 @@ class ChatProvider extends ChangeNotifier {
     final newSession = ChatSession(
       id: const Uuid().v4(),
       title: title ?? '新对话 ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
-      model: settingsProvider.activeModel,
+      model: settingsProvider.activeModelDisplayName,
     );
     _storage.saveSession(newSession);
     _sessions.insert(0, newSession);

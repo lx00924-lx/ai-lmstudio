@@ -13,6 +13,7 @@ class ChatScreen extends StatelessWidget {
 
   void _showModelSelector(BuildContext context) {
     final settingsProvider = context.read<SettingsProvider>();
+    final endpoints = settingsProvider.settings.apiEndpoints;
 
     showModalBottomSheet(
       context: context,
@@ -34,30 +35,35 @@ class ChatScreen extends StatelessWidget {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                 ),
-                ...AppSettings.availableModels.map((model) {
-                  final isSelected = settingsProvider.activeModel == model.id;
-                  return ListTile(
-                    leading: Icon(
-                      model.isReasoner ? Icons.psychology : Icons.bolt,
-                      color: isSelected ? const Color(0xFF0284C7) : null,
-                    ),
-                    title: Text(
-                      model.name,
-                      style: TextStyle(
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                if (endpoints.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('暂无可用模型，请在设置中添加 API 端点'),
+                  )
+                else
+                  ...endpoints.map((ep) {
+                    final isSelected = settingsProvider.activeEndpointId == ep.id;
+                    return ListTile(
+                      leading: Icon(
+                        Icons.bolt,
                         color: isSelected ? const Color(0xFF0284C7) : null,
                       ),
-                    ),
-                    subtitle: Text(model.description),
-                    trailing: isSelected
-                        ? const Icon(Icons.check, color: Color(0xFF0284C7))
-                        : null,
-                    onTap: () {
-                      settingsProvider.updateModel(model.id);
-                      Navigator.pop(ctx);
-                    },
-                  );
-                }),
+                      title: Text(
+                        ep.cardName,
+                        style: TextStyle(
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          color: isSelected ? const Color(0xFF0284C7) : null,
+                        ),
+                      ),
+                      trailing: isSelected
+                          ? const Icon(Icons.check, color: Color(0xFF0284C7))
+                          : null,
+                      onTap: () {
+                        settingsProvider.selectEndpoint(ep);
+                        Navigator.pop(ctx);
+                      },
+                    );
+                  }),
               ],
             ),
           ),
@@ -83,9 +89,7 @@ class ChatScreen extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  settings.activeModel == 'deepseek-reasoner'
-                      ? 'DeepSeek-R1 (深度思考)'
-                      : 'DeepSeek-V3 (极速)',
+                  settings.activeModelDisplayName,
                 ),
                 const Icon(Icons.keyboard_arrow_down, size: 20),
               ],
