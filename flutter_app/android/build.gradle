@@ -13,13 +13,20 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
-// 解决 compileSdk 冲突：统一将所有三方插件提升至 compileSdkVersion 36
+// 解决 compileSdk 冲突：统一将所有三方插件提升至 compileSdkVersion 36（兼容 Gradle 8+ 生命周期）
 subprojects {
-    afterEvaluate { project ->
-        if (project.hasProperty("android")) {
-            project.android {
+    def configureCompileSdk = { prj ->
+        if (prj.hasProperty("android")) {
+            prj.android {
                 compileSdkVersion 36
             }
+        }
+    }
+    if (project.state.executed) {
+        configureCompileSdk(project)
+    } else {
+        project.afterEvaluate { prj ->
+            configureCompileSdk(prj)
         }
     }
 }
