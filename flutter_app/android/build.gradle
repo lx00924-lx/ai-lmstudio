@@ -5,15 +5,15 @@ allprojects {
     }
 }
 
-rootProject.buildDir = '../build'
+rootProject.buildDir = "../build"
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
 }
 subprojects {
-    project.evaluationDependsOn(':app')
+    project.evaluationDependsOn(":app")
 }
 
-// 解决 compileSdk 版本不匹配问题：统一将所有子项目/三方插件提升至 compileSdkVersion 36
+// 解决 compileSdk 冲突：统一将所有三方插件提升至 compileSdkVersion 36
 subprojects {
     afterEvaluate { project ->
         if (project.hasProperty("android")) {
