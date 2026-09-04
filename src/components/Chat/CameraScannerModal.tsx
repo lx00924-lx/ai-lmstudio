@@ -112,8 +112,8 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          width: { ideal: 9248, max: 9248 },
+          height: { ideal: 6930, max: 6930 },
         },
         audio: false,
       };
@@ -235,8 +235,8 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
     if (!videoRef.current) return;
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -246,7 +246,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
       ctx.scale(-1, 1);
     }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.98);
 
     // Also check if the photo contains a QR code
     try {

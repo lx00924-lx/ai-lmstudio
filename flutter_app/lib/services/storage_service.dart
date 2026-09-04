@@ -8,15 +8,17 @@ class StorageService {
   static final StorageService instance = StorageService._();
   StorageService._();
 
-  Box get _sessionsBox => Hive.box('sessions_box');
-  Box get _messagesBox => Hive.box('messages_box');
-  Box get _settingsBox => Hive.box('settings_box');
+  Box? get _sessionsBox => Hive.isBoxOpen('sessions_box') ? Hive.box('sessions_box') : null;
+  Box? get _messagesBox => Hive.isBoxOpen('messages_box') ? Hive.box('messages_box') : null;
+  Box? get _settingsBox => Hive.isBoxOpen('settings_box') ? Hive.box('settings_box') : null;
 
   // --- 会话相关 ---
   List<ChatSession> getAllSessions() {
+    final box = _sessionsBox;
+    if (box == null) return [];
     final List<ChatSession> list = [];
-    for (var key in _sessionsBox.keys) {
-      final val = _sessionsBox.get(key);
+    for (var key in box.keys) {
+      final val = box.get(key);
       if (val != null) {
         try {
           if (val is Map) {
@@ -32,27 +34,38 @@ class StorageService {
   }
 
   Future<void> saveSession(ChatSession session) async {
-    await _sessionsBox.put(session.id, session.toMap());
+    final box = _sessionsBox;
+    if (box != null) {
+      await box.put(session.id, session.toMap());
+    }
   }
 
   Future<void> deleteSession(String sessionId) async {
-    await _sessionsBox.delete(sessionId);
-    // 级联删除该会话的所有消息
-    final keysToDelete = <dynamic>[];
-    for (var key in _messagesBox.keys) {
-      final msg = _messagesBox.get(key);
-      if (msg != null && msg['sessionId'] == sessionId) {
-        keysToDelete.add(key);
-      }
+    final sBox = _sessionsBox;
+    if (sBox != null) {
+      await sBox.delete(sessionId);
     }
-    await _messagesBox.deleteAll(keysToDelete);
+    // 级联删除该会话的所有消息
+    final mBox = _messagesBox;
+    if (mBox != null) {
+      final keysToDelete = <dynamic>[];
+      for (var key in mBox.keys) {
+        final msg = mBox.get(key);
+        if (msg != null && msg['sessionId'] == sessionId) {
+          keysToDelete.add(key);
+        }
+      }
+      await mBox.deleteAll(keysToDelete);
+    }
   }
 
   // --- 消息相关 ---
   List<ChatMessage> getMessagesForSession(String sessionId) {
+    final box = _messagesBox;
+    if (box == null) return [];
     final List<ChatMessage> list = [];
-    for (var key in _messagesBox.keys) {
-      final val = _messagesBox.get(key);
+    for (var key in box.keys) {
+      final val = box.get(key);
       if (val != null && val['sessionId'] == sessionId) {
         try {
           if (val is Map) {
@@ -66,24 +79,39 @@ class StorageService {
   }
 
   Future<void> saveMessage(ChatMessage message) async {
-    await _messagesBox.put(message.id, message.toMap());
+    final box = _messagesBox;
+    if (box != null) {
+      await box.put(message.id, message.toMap());
+    }
   }
 
   Future<void> clearAllData() async {
-    await _sessionsBox.clear();
-    await _messagesBox.clear();
+    final sBox = _sessionsBox;
+    if (sBox != null) await sBox.clear();
+    final mBox = _messagesBox;
+    if (mBox != null) await mBox.clear();
   }
 
   // --- 设置持久化 ---
   AppSettings loadSettings() {
-    final val = _settingsBox.get('app_settings');
-    if (val != null && val is Map) {
-      return AppSettings.fromMap(val);
-    }
+    try {
+      final box = _settingsBox;
+      if (box != null) {
+        final val = box.get('app_settings');
+        if (val != null && val is Map) {
+          return AppSettings.fromMap(val);
+        }
+      }
+    } catch (_) {}
     return AppSettings();
   }
 
   Future<void> saveSettings(AppSettings settings) async {
-    await _settingsBox.put('app_settings', settings.toMap());
+    try {
+      final box = _settingsBox;
+      if (box != null) {
+        await box.put('app_settings', settings.toMap());
+      }
+    } catch (_) {}
   }
 }

@@ -24,32 +24,40 @@ export async function getCroppedImg(
     throw new Error('No 2d context');
   }
 
-  const maxSize = Math.max(image.width, image.height);
-  const safeArea = 2 * ((maxSize / 2) * Math.sqrt(2));
+  // Set destination canvas directly to crop dimensions
+  canvas.width = Math.max(1, Math.round(pixelCrop.width));
+  canvas.height = Math.max(1, Math.round(pixelCrop.height));
 
-  canvas.width = safeArea;
-  canvas.height = safeArea;
+  if (rotation === 0) {
+    // Direct zero-overhead high-speed crop, supports up to 9248x6930 without memory spikes
+    ctx.drawImage(
+      image,
+      pixelCrop.x,
+      pixelCrop.y,
+      pixelCrop.width,
+      pixelCrop.height,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+  } else {
+    // Handle rotation around center if specified
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(getRadianAngle(rotation));
+    ctx.translate(-canvas.width / 2, -canvas.height / 2);
+    ctx.drawImage(
+      image,
+      pixelCrop.x,
+      pixelCrop.y,
+      pixelCrop.width,
+      pixelCrop.height,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+  }
 
-  ctx.translate(safeArea / 2, safeArea / 2);
-  ctx.rotate(getRadianAngle(rotation));
-  ctx.translate(-safeArea / 2, -safeArea / 2);
-
-  ctx.drawImage(
-    image,
-    safeArea / 2 - image.width * 0.5,
-    safeArea / 2 - image.height * 0.5
-  );
-  
-  const data = ctx.getImageData(0, 0, safeArea, safeArea);
-
-  canvas.width = pixelCrop.width;
-  canvas.height = pixelCrop.height;
-
-  ctx.putImageData(
-    data,
-    0 - safeArea / 2 + image.width * 0.5 - pixelCrop.x,
-    0 - safeArea / 2 + image.height * 0.5 - pixelCrop.y
-  );
-
-  return canvas.toDataURL('image/jpeg');
+  return canvas.toDataURL('image/jpeg', 0.95);
 }

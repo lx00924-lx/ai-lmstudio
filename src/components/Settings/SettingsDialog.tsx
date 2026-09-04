@@ -1994,8 +1994,7 @@ if %errorlevel% neq 0 (
   const handleImageSelect = async (field: keyof AppSettings, source: CameraSource) => {
     try {
       const image = await CapCamera.getPhoto({
-        quality: 90,
-        width: 800,
+        quality: 100,
         allowEditing: false,
         resultType: CameraResultType.DataUrl,
         source: source
@@ -2224,7 +2223,7 @@ if %errorlevel% neq 0 (
           <div className="flex items-center justify-between">
             <DialogTitle>应用设置</DialogTitle>
             <span className="text-[10px] font-mono text-muted-foreground mr-6">
-              {localStorage.getItem('app_version') || 'v0.0.10'}
+              {localStorage.getItem('app_version') || 'v1.0.1'}
             </span>
           </div>
         </DialogHeader>

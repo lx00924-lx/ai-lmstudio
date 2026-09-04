@@ -1332,7 +1332,7 @@ function compareSemVer(v1: string, v2: string): number {
       
       const data = await response.json();
       const latestVersion = data.tag_name;
-      const currentVersion = localStorage.getItem('app_version') || '0.0.10'; 
+      const currentVersion = localStorage.getItem('app_version') || '1.0.1'; 
 
       const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron;
       const isCapacitorAndroid = typeof window !== 'undefined' && 'Capacitor' in window && (window as any).Capacitor?.getPlatform() === 'android';

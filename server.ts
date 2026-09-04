@@ -697,7 +697,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit for ultra-high-res photos (up to 9248x6930)
 });
 
 async function startServer() {
@@ -711,7 +711,8 @@ async function startServer() {
     maxHttpBufferSize: 1e8,
   });
 
-  app.use(express.json({ limit: "50mb" }));
+  app.use(express.json({ limit: "100mb" }));
+  app.use(express.urlencoded({ limit: "100mb", extended: true }));
   app.use("/uploads", express.static(UPLOADS_DIR));
 
   // User Auth API
