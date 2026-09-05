@@ -4,8 +4,10 @@ import '../models/app_settings.dart';
 import '../models/chat_session.dart';
 import '../providers/chat_provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/image_picker_helper.dart';
 import '../widgets/chat_input_bar.dart';
 import '../widgets/message_bubble.dart';
+import 'log_console_screen.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatelessWidget {
@@ -55,6 +57,10 @@ class ChatScreen extends StatelessWidget {
                           color: isSelected ? const Color(0xFF0284C7) : null,
                         ),
                       ),
+                      subtitle: Text(
+                        '${ep.modelName} · ${ep.endpoint}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
                       trailing: isSelected
                           ? const Icon(Icons.check, color: Color(0xFF0284C7))
                           : null,
@@ -75,8 +81,12 @@ class ChatScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chat = context.watch<ChatProvider>();
-    final settings = context.watch<SettingsProvider>();
+    final settings = context.watch<SettingsProvider>().settings;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    final displayName = settings.aiName.isNotEmpty
+        ? '${settings.aiName} (${settings.activeModelDisplayName})'
+        : settings.activeModelDisplayName;
 
     return Scaffold(
       appBar: AppBar(
@@ -89,19 +99,16 @@ class ChatScreen extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  settings.activeModelDisplayName,
+                  displayName,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
+                const SizedBox(width: 4),
                 const Icon(Icons.keyboard_arrow_down, size: 20),
               ],
             ),
           ),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: '新建对话',
-            onPressed: () => chat.createNewSession(),
-          ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: '系统设置',
@@ -158,6 +165,10 @@ class ChatScreen extends StatelessWidget {
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                         ),
                       ),
+                      subtitle: Text(
+                        session.model,
+                        style: const TextStyle(fontSize: 11),
+                      ),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline, size: 18),
                         onPressed: () => chat.deleteSession(session.id),
@@ -174,53 +185,88 @@ class ChatScreen extends StatelessWidget {
           ),
         ),
       ),
-      body: Column(
+      // 实装悬浮调试球 (根据设置项 showDebugFab 动态控制)
+      floatingActionButton: settings.showDebugFab
+          ? FloatingActionButton.small(
+              heroTag: 'debug_console_fab',
+              backgroundColor: const Color(0xFF0284C7).withOpacity(0.9),
+              foregroundColor: Colors.white,
+              tooltip: '打开检修控制台',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LogConsoleScreen()),
+                );
+              },
+              child: const Icon(Icons.bug_report, size: 20),
+            )
+          : null,
+      body: Stack(
         children: [
-          Expanded(
-            child: chat.messages.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF0284C7), Color(0xFF2563EB)],
+          // 自定义背景图片渲染（支持暗夜模式开关与透明度）
+          if (settings.customBackground.isNotEmpty &&
+              (!isDark || settings.showBackgroundInDarkMode)) ...[
+            Positioned.fill(
+              child: Opacity(
+                opacity: (settings.backgroundOpacity / 100).clamp(0.0, 1.0),
+                child: ImagePickerHelper.decodeBase64Image(settings.customBackground) != null
+                    ? Image.memory(
+                        ImagePickerHelper.decodeBase64Image(settings.customBackground)!,
+                        fit: BoxFit.cover,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+          ],
+          Column(
+            children: [
+              Expanded(
+                child: chat.messages.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 64,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [Color(0xFF0284C7), Color(0xFF2563EB)],
+                                ),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: const Icon(Icons.auto_awesome, color: Colors.white, size: 36),
                             ),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Icon(Icons.auto_awesome, color: Colors.white, size: 36),
+                            const SizedBox(height: 16),
+                            Text(
+                              '随时向 ${settings.aiName.isNotEmpty ? settings.aiName : 'DeepSeek'} 提问',
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '原生 Flutter 驱动 · 支持超长思考链 · 毫秒级流式响应',
+                              style: TextStyle(
+                                color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          '随时向 DeepSeek 提问',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          '原生 Flutter 驱动 · 支持超长思考链 · 毫秒级流式响应',
-                          style: TextStyle(
-                            color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    itemCount: chat.messages.length,
-                    itemBuilder: (ctx, index) {
-                      return MessageBubble(message: chat.messages[index]);
-                    },
-                  ),
-          ),
-          ChatInputBar(
-            onSend: (text) => chat.sendMessage(text),
-            onStop: () => chat.stopGeneration(),
-            isGenerating: chat.isGenerating,
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        itemCount: chat.messages.length,
+                        itemBuilder: (ctx, index) {
+                          return MessageBubble(message: chat.messages[index]);
+                        },
+                      ),
+              ),
+              ChatInputBar(
+                onSend: (text, {attachments}) => chat.sendMessage(text, attachments: attachments),
+                onStop: () => chat.stopGeneration(),
+                isGenerating: chat.isGenerating,
+              ),
+            ],
           ),
         ],
       ),

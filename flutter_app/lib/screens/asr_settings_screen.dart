@@ -25,6 +25,39 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
     _modelCtrl = TextEditingController(text: s.asrModel);
     _keyCtrl = TextEditingController(text: s.asrApiKey);
     _ctxCtrl = TextEditingController(text: s.asrContextLength.toString());
+
+    _httpCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.asrHttpEndpoint = _httpCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _wsCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.asrWsEndpoint = _wsCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _modelCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.asrModel = _modelCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _keyCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.asrApiKey = _keyCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _ctxCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      final val = int.tryParse(_ctxCtrl.text.trim());
+      if (val != null) {
+        sp.settings.asrContextLength = val;
+        sp.updateSettings(sp.settings);
+      }
+    });
   }
 
   @override

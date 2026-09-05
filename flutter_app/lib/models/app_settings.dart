@@ -62,6 +62,7 @@ class AppSettings {
   String activeModelDisplayName; // 当前主界面展示的模型名称
 
   // --- 1. 账户设置 ---
+  bool isLoggedIn;
   String loginAccount;
   String userName;
   String userAvatar; // Base64 或本地图片路径
@@ -115,7 +116,8 @@ class AppSettings {
     this.activeEndpointId = '',
     this.activeModelDisplayName = 'DeepSeek-V3',
     // 账户
-    this.loginAccount = '123',
+    this.isLoggedIn = false,
+    this.loginAccount = '',
     this.userName = '用户',
     this.userAvatar = '',
     this.aiName = 'Aether-X',
@@ -184,6 +186,7 @@ class AppSettings {
       'isDarkMode': isDarkMode,
       'activeEndpointId': activeEndpointId,
       'activeModelDisplayName': activeModelDisplayName,
+      'isLoggedIn': isLoggedIn,
       'loginAccount': loginAccount,
       'userName': userName,
       'userAvatar': userAvatar,
@@ -255,7 +258,8 @@ class AppSettings {
       isDarkMode: map['isDarkMode'] as bool? ?? false,
       activeEndpointId: activeId,
       activeModelDisplayName: map['activeModelDisplayName']?.toString() ?? activeEp.cardName,
-      loginAccount: map['loginAccount']?.toString() ?? '123',
+      isLoggedIn: map['isLoggedIn'] as bool? ?? false,
+      loginAccount: map['loginAccount']?.toString() ?? '',
       userName: map['userName']?.toString() ?? '用户',
       userAvatar: map['userAvatar']?.toString() ?? '',
       aiName: map['aiName']?.toString() ?? 'Aether-X',

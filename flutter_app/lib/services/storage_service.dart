@@ -59,6 +59,11 @@ class StorageService {
     }
   }
 
+  bool hasSession(String sessionId) {
+    final box = _sessionsBox;
+    return box != null && box.containsKey(sessionId);
+  }
+
   // --- 消息相关 ---
   List<ChatMessage> getMessagesForSession(String sessionId) {
     final box = _messagesBox;
@@ -83,6 +88,73 @@ class StorageService {
     if (box != null) {
       await box.put(message.id, message.toMap());
     }
+  }
+
+  bool hasMessage(String messageId) {
+    final box = _messagesBox;
+    return box != null && box.containsKey(messageId);
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    final box = _messagesBox;
+    if (box != null) {
+      await box.delete(messageId);
+    }
+  }
+
+  List<ChatMessage> getAllMessages() {
+    final box = _messagesBox;
+    if (box == null) return [];
+    final List<ChatMessage> list = [];
+    for (var key in box.keys) {
+      final val = box.get(key);
+      if (val != null) {
+        try {
+          if (val is Map) {
+            list.add(ChatMessage.fromMap(val));
+          }
+        } catch (_) {}
+      }
+    }
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  /// 导出全部对话数据（会话 + 消息）
+  Map<String, dynamic> exportAllData() {
+    final sessions = getAllSessions();
+    final allMessages = getAllMessages();
+    return {
+      'version': '1.0.0',
+      'exportTime': DateTime.now().toIso8601String(),
+      'sessions': sessions.map((s) => s.toMap()).toList(),
+      'messages': allMessages.map((m) => m.toMap()).toList(),
+    };
+  }
+
+  /// 导入并合并备份数据
+  Future<int> importData(Map<String, dynamic> data) async {
+    int importedCount = 0;
+    final sessionsData = data['sessions'] as List?;
+    final messagesData = data['messages'] as List?;
+    if (sessionsData != null) {
+      for (var s in sessionsData) {
+        if (s is Map) {
+          final session = ChatSession.fromMap(s);
+          await saveSession(session);
+        }
+      }
+    }
+    if (messagesData != null) {
+      for (var m in messagesData) {
+        if (m is Map) {
+          final message = ChatMessage.fromMap(m);
+          await saveMessage(message);
+          importedCount++;
+        }
+      }
+    }
+    return importedCount;
   }
 
   Future<void> clearAllData() async {

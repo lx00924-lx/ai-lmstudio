@@ -805,6 +805,47 @@ async function startServer() {
     }
   });
 
+  app.post("/api/delete-message", async (req, res) => {
+    const { userId, messageId } = req.body;
+    if (!userId || !messageId) {
+      return res.status(400).json({ error: "Missing userId or messageId" });
+    }
+    try {
+      await withFileLock(MESSAGES_FILE, async () => {
+        const allMessages = await safeReadJSON<Record<string, any[]>>(MESSAGES_FILE, {});
+        if (allMessages[userId]) {
+          allMessages[userId] = allMessages[userId].filter((m: any) => m.id !== messageId);
+          await safeWriteJSON(MESSAGES_FILE, allMessages);
+        }
+      });
+      io.to(`user_${userId}`).emit("message_deleted", messageId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete message error:", error);
+      res.status(500).json({ error: "Failed to delete message" });
+    }
+  });
+
+  app.post("/api/delete-session", async (req, res) => {
+    const { userId, sessionId } = req.body;
+    if (!userId || !sessionId) {
+      return res.status(400).json({ error: "Missing userId or sessionId" });
+    }
+    try {
+      await withFileLock(MESSAGES_FILE, async () => {
+        const allMessages = await safeReadJSON<Record<string, any[]>>(MESSAGES_FILE, {});
+        if (allMessages[userId]) {
+          allMessages[userId] = allMessages[userId].filter((m: any) => m.sessionId !== sessionId);
+          await safeWriteJSON(MESSAGES_FILE, allMessages);
+        }
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete session error:", error);
+      res.status(500).json({ error: "Failed to delete session" });
+    }
+  });
+
   // Server-side Background Chat Generation (Persists even if client is closed/killed)
   app.post("/api/chat/generate", async (req, res) => {
     const { userId, assistantMessageId, messages, settings } = req.body;

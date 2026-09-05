@@ -30,22 +30,44 @@ class ChatMessage {
       'id': id,
       'sessionId': sessionId,
       'role': role.name,
+      'sender': role == MessageRole.user ? 'user' : 'ai',
       'content': content,
+      'text': content,
       'reasoningContent': reasoningContent,
+      'thought': reasoningContent,
       'createdAt': createdAt.toIso8601String(),
+      'timestamp': createdAt.toIso8601String(),
       'elapsedSeconds': elapsedSeconds,
       'attachments': attachments,
     };
   }
 
   factory ChatMessage.fromMap(Map<dynamic, dynamic> map) {
+    String roleStr = (map['role'] ?? map['sender'] ?? 'user').toString().toLowerCase();
+    if (roleStr == 'ai') roleStr = 'assistant';
+    MessageRole role = MessageRole.user;
+    for (var r in MessageRole.values) {
+      if (r.name == roleStr) {
+        role = r;
+        break;
+      }
+    }
+    final content = (map['content'] ?? map['text'] ?? '').toString();
+    final reasoning = (map['reasoningContent'] ?? map['thought'])?.toString();
+    final timeStr = (map['createdAt'] ?? map['timestamp'])?.toString();
+    DateTime createdAt = DateTime.now();
+    if (timeStr != null) {
+      createdAt = DateTime.tryParse(timeStr) ?? DateTime.now();
+    }
+    final sessId = (map['sessionId'] ?? 'default_session').toString();
+
     return ChatMessage(
-      id: map['id'] as String,
-      sessionId: map['sessionId'] as String,
-      role: MessageRole.values.byName(map['role'] as String),
-      content: map['content'] as String,
-      reasoningContent: map['reasoningContent'] as String?,
-      createdAt: DateTime.parse(map['createdAt'] as String),
+      id: map['id']?.toString() ?? '',
+      sessionId: sessId,
+      role: role,
+      content: content,
+      reasoningContent: reasoning,
+      createdAt: createdAt,
       elapsedSeconds: map['elapsedSeconds'] as int?,
       attachments: (map['attachments'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
     );

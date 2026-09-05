@@ -15,6 +15,7 @@ class ChatProvider extends ChangeNotifier {
   List<ChatSession> _sessions = [];
   ChatSession? _currentSession;
   List<ChatMessage> _messages = [];
+  ChatMessage? _quotedMessage;
   bool _isGenerating = false;
   StreamSubscription? _streamSub;
 
@@ -25,7 +26,31 @@ class ChatProvider extends ChangeNotifier {
   List<ChatSession> get sessions => _sessions;
   ChatSession? get currentSession => _currentSession;
   List<ChatMessage> get messages => _messages;
+  ChatMessage? get quotedMessage => _quotedMessage;
   bool get isGenerating => _isGenerating;
+
+  void setQuotedMessage(ChatMessage? msg) {
+    _quotedMessage = msg;
+    notifyListeners();
+  }
+
+  void clearQuotedMessage() {
+    _quotedMessage = null;
+    notifyListeners();
+  }
+
+  void deleteMessage(String messageId) {
+    _storage.deleteMessage(messageId);
+    _messages.removeWhere((m) => m.id == messageId);
+    if (_quotedMessage?.id == messageId) {
+      _quotedMessage = null;
+    }
+    notifyListeners();
+  }
+
+  void reloadFromStorage() {
+    loadSessions();
+  }
 
   void loadSessions() {
     _sessions = _storage.getAllSessions();

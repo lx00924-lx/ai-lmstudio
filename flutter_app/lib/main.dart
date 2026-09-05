@@ -5,6 +5,8 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'providers/chat_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/chat_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -113,7 +115,9 @@ class DeepSeekNativeApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const ChatScreen(),
+      home: settings.enableSplash
+          ? const SplashScreen()
+          : (settings.isLoggedIn ? const ChatScreen() : const LoginScreen()),
     );
   }
 }

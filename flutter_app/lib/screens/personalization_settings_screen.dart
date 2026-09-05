@@ -1,6 +1,8 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/image_picker_helper.dart';
 
 class PersonalizationSettingsScreen extends StatefulWidget {
   const PersonalizationSettingsScreen({super.key});
@@ -25,6 +27,43 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
     _splashDurationCtrl = TextEditingController(text: s.splashDurationMs.toString());
     _systemPromptCtrl = TextEditingController(text: s.systemPrompt);
     _opacityCtrl = TextEditingController(text: s.backgroundOpacity.toString());
+
+    // 绑定实时自动保存监听，用户输入任意文字即刻落盘
+    _splashTitleCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.splashTitle = _splashTitleCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _splashSubtitleCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.splashSubtitle = _splashSubtitleCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _splashDurationCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      final val = int.tryParse(_splashDurationCtrl.text.trim());
+      if (val != null) {
+        sp.settings.splashDurationMs = val;
+        sp.updateSettings(sp.settings);
+      }
+    });
+
+    _systemPromptCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.systemPrompt = _systemPromptCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _opacityCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      final val = int.tryParse(_opacityCtrl.text.trim());
+      if (val != null && val >= 0 && val <= 100) {
+        sp.settings.backgroundOpacity = val;
+        sp.updateSettings(sp.settings);
+      }
+    });
   }
 
   @override
@@ -37,20 +76,6 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
     super.dispose();
   }
 
-  void _save() {
-    final sp = context.read<SettingsProvider>();
-    final s = sp.settings;
-    s.splashTitle = _splashTitleCtrl.text.trim();
-    s.splashSubtitle = _splashSubtitleCtrl.text.trim();
-    s.splashDurationMs = int.tryParse(_splashDurationCtrl.text.trim()) ?? 1000;
-    s.systemPrompt = _systemPromptCtrl.text.trim();
-    s.backgroundOpacity = int.tryParse(_opacityCtrl.text.trim()) ?? 100;
-    sp.updateSettings(s);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('个性化设置已保存')),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final sp = context.watch<SettingsProvider>();
@@ -60,18 +85,11 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
     return Scaffold(
       appBar: AppBar(
         title: const Text('个性化设置'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.check),
-            tooltip: '保存',
-            onPressed: _save,
-          ),
-        ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         children: [
-          // 界面与背景外观
+          // 界面显示与壁纸
           Card(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
@@ -79,29 +97,68 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('背景与字体', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
+                  const Text('界面与显示', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('暗黑模式', style: TextStyle(fontSize: 14)),
+                    value: s.isDarkMode,
+                    onChanged: (val) => sp.toggleTheme(),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('暗黑模式下仍显示自定义壁纸', style: TextStyle(fontSize: 14)),
+                    value: s.showBackgroundInDarkMode,
+                    onChanged: (val) {
+                      s.showBackgroundInDarkMode = val;
+                      sp.updateSettings(s);
+                    },
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Container(
-                        width: 48,
-                        height: 48,
+                        width: 44,
+                        height: 44,
                         decoration: BoxDecoration(
-                          color: Colors.grey.withOpacity(0.2),
+                          color: Colors.grey.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                          image: ImagePickerHelper.decodeBase64Image(s.customBackground) != null
+                              ? DecorationImage(
+                                  image: MemoryImage(ImagePickerHelper.decodeBase64Image(s.customBackground)!),
+                                  fit: BoxFit.cover,
+                                )
+                              : null,
                         ),
-                        child: const Icon(Icons.wallpaper_outlined, color: Color(0xFF0284C7)),
+                        child: ImagePickerHelper.decodeBase64Image(s.customBackground) == null
+                            ? const Icon(Icons.wallpaper, color: Color(0xFF0284C7))
+                            : null,
                       ),
                       const SizedBox(width: 12),
-                      const Text('自定义背景', style: TextStyle(fontSize: 14)),
+                      const Text('自定义聊天背景', style: TextStyle(fontSize: 14)),
                       const Spacer(),
+                      if (s.customBackground.isNotEmpty)
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 18, color: Colors.grey),
+                          tooltip: '清除背景',
+                          onPressed: () {
+                            s.customBackground = '';
+                            sp.updateSettings(s);
+                          },
+                        ),
                       OutlinedButton.icon(
                         icon: const Icon(Icons.image_outlined, size: 16),
                         label: const Text('选择图片'),
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已选择默认唯美插画背景')),
-                          );
+                        onPressed: () async {
+                          final base64Image = await ImagePickerHelper.pickImageAsBase64();
+                          if (base64Image != null && mounted) {
+                            s.customBackground = base64Image;
+                            sp.updateSettings(s);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('背景图片已实时更换并保存')),
+                            );
+                          }
                         },
                       ),
                     ],
@@ -138,21 +195,11 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                     controller: _opacityCtrl,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
-                      labelText: '背景透明度 (%)',
+                      labelText: '背景不透明度 (0-100%)',
                       hintText: '100',
                       border: OutlineInputBorder(),
                       isDense: true,
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('暗夜模式显示背景', style: TextStyle(fontSize: 14)),
-                    value: s.showBackgroundInDarkMode,
-                    onChanged: (val) {
-                      s.showBackgroundInDarkMode = val;
-                      sp.updateSettings(s);
-                    },
                   ),
                 ],
               ),
@@ -173,6 +220,10 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('启用启动页', style: TextStyle(fontSize: 14)),
+                    subtitle: Text(
+                      s.enableSplash ? '已开启，冷启动展示指定时长' : '已关闭，冷启动直接秒进聊天界面',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    ),
                     value: s.enableSplash,
                     onChanged: (val) {
                       s.enableSplash = val;
@@ -212,15 +263,48 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                   const SizedBox(height: 12),
                   Row(
                     children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                          image: ImagePickerHelper.decodeBase64Image(s.splashImage) != null
+                              ? DecorationImage(
+                                  image: MemoryImage(ImagePickerHelper.decodeBase64Image(s.splashImage)!),
+                                  fit: BoxFit.cover,
+                                )
+                              : null,
+                        ),
+                        child: ImagePickerHelper.decodeBase64Image(s.splashImage) == null
+                            ? const Icon(Icons.rocket_launch_outlined, color: Color(0xFF0284C7))
+                            : null,
+                      ),
+                      const SizedBox(width: 12),
                       const Text('启动图片', style: TextStyle(fontSize: 14)),
                       const Spacer(),
+                      if (s.splashImage.isNotEmpty)
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 18, color: Colors.grey),
+                          tooltip: '恢复默认',
+                          onPressed: () {
+                            s.splashImage = '';
+                            sp.updateSettings(s);
+                          },
+                        ),
                       OutlinedButton.icon(
                         icon: const Icon(Icons.photo_outlined, size: 16),
                         label: const Text('选择图片'),
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已配置默认启动图标')),
-                          );
+                        onPressed: () async {
+                          final base64Image = await ImagePickerHelper.pickImageAsBase64();
+                          if (base64Image != null && mounted) {
+                            s.splashImage = base64Image;
+                            sp.updateSettings(s);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('启动页图片已实时更新并保存')),
+                            );
+                          }
                         },
                       ),
                     ],
@@ -231,7 +315,7 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
           ),
           const SizedBox(height: 16),
 
-          // 系统回复逻辑 (System Prompt)
+          // 系统回复逻辑 (System Prompt) - 自适应文字长度，弹性向下延展
           Card(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
@@ -239,21 +323,37 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('回复逻辑 (System Prompt)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Row(
+                    children: [
+                      Icon(Icons.psychology_outlined, color: Color(0xFF0284C7), size: 20),
+                      SizedBox(width: 8),
+                      Text('回复逻辑 (System Prompt)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '设置 AI 的角色设定与系统前置提示词，输入框会随文字长度自动撑开扩展。',
+                    style: TextStyle(fontSize: 12, color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                  ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _systemPromptCtrl,
-                    maxLines: 4,
+                    minLines: 3,
+                    maxLines: null, // 自适应文字长度，不再局限于固定狭小滑动区域
+                    keyboardType: TextInputType.multiline,
+                    style: const TextStyle(fontSize: 14, height: 1.5),
                     decoration: const InputDecoration(
                       labelText: '系统人设与回复逻辑',
-                      hintText: '例如：你是一个专业的程序员，回答精简准确...',
+                      hintText: '例如：你是一个专业的程序员，回答精简准确，优先给出高质量代码...',
                       border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.all(14),
                     ),
                   ),
                 ],
               ),
             ),
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );
@@ -283,8 +383,8 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,
-              color: isSelected ? Colors.white : null,
               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              color: isSelected ? Colors.white : null,
             ),
           ),
         ),

@@ -17,7 +17,7 @@ class ReasoningView extends StatefulWidget {
 }
 
 class _ReasoningViewState extends State<ReasoningView> {
-  bool _isExpanded = true;
+  bool _isExpanded = false;
 
   @override
   Widget build(BuildContext context) {

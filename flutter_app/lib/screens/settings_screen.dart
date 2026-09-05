@@ -7,6 +7,7 @@ import 'personalization_settings_screen.dart';
 import 'api_settings_screen.dart';
 import 'asr_settings_screen.dart';
 import 'harness_settings_screen.dart';
+import 'log_console_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -52,7 +53,7 @@ class SettingsScreen extends StatelessWidget {
             context,
             icon: Icons.manage_accounts_outlined,
             iconColor: const Color(0xFF0284C7),
-            title: '1. 账户设置',
+            title: '账户设置',
             subtitle: '账号、用户名、用户头像、AI名称、AI头像、修改密码',
             onTap: () => Navigator.push(
               context,
@@ -63,7 +64,7 @@ class SettingsScreen extends StatelessWidget {
             context,
             icon: Icons.palette_outlined,
             iconColor: Colors.deepPurple,
-            title: '2. 个性化设置',
+            title: '个性化设置',
             subtitle: '自定义背景、字体大小(13-18px)、透明度、启动页设置、回复逻辑',
             onTap: () => Navigator.push(
               context,
@@ -74,7 +75,7 @@ class SettingsScreen extends StatelessWidget {
             context,
             icon: Icons.hub_outlined,
             iconColor: Colors.teal,
-            title: '3. 大模型 API 设置',
+            title: '大模型 API 设置',
             subtitle: '点击「+」添加 API 地址、Key、模型名、专属上下文滑动截断、卡片管理',
             trailingBadge: '${s.apiEndpoints.length} 个端点',
             onTap: () => Navigator.push(
@@ -86,7 +87,7 @@ class SettingsScreen extends StatelessWidget {
             context,
             icon: Icons.mic_none_outlined,
             iconColor: Colors.amber.shade800,
-            title: '4. 语音转写设置 (ASR)',
+            title: '语音转写设置 (ASR)',
             subtitle: '商用预设(SenseVoice/Groq/OpenAI/阿里)、HTTP/WS 测试、模型、Key',
             onTap: () => Navigator.push(
               context,
@@ -97,7 +98,7 @@ class SettingsScreen extends StatelessWidget {
             context,
             icon: Icons.terminal_outlined,
             iconColor: Colors.indigo,
-            title: '5. DeepSeek Harness 设置',
+            title: 'DeepSeek Harness 设置',
             subtitle: '电脑本地 Agent 桥接、免公网 IP 反向长连接、工作区会话刷新',
             trailingBadge: s.isHarnessOnline ? '在线' : '离线',
             badgeColor: s.isHarnessOnline ? Colors.green : Colors.grey,
@@ -275,8 +276,9 @@ class SettingsScreen extends StatelessWidget {
                           icon: const Icon(Icons.bug_report_outlined, size: 16),
                           label: const Text('打开控制台'),
                           onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('控制台运行正常，当前零致命异常')),
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => const LogConsoleScreen()),
                             );
                           },
                         ),
@@ -287,11 +289,11 @@ class SettingsScreen extends StatelessWidget {
                           icon: const Icon(Icons.copy, size: 16),
                           label: const Text('复制日志'),
                           onPressed: () {
-                            Clipboard.setData(const ClipboardData(
-                              text: '[System Log] App loaded successfully. No errors.',
+                            Clipboard.setData(ClipboardData(
+                              text: AppLogger.instance.exportAsString(),
                             ));
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('运行日志已复制')),
+                              const SnackBar(content: Text('运行日志已复制到剪贴板')),
                             );
                           },
                         ),

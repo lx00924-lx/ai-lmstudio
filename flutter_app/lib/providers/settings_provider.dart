@@ -10,10 +10,13 @@ class SettingsProvider extends ChangeNotifier {
   }
 
   AppSettings get settings => _settings;
+  bool get isLoggedIn => _settings.isLoggedIn;
   bool get isDarkMode => _settings.isDarkMode;
+  bool get enableSplash => _settings.enableSplash;
   String get activeModelDisplayName => _settings.activeModelDisplayName;
   String get activeEndpointId => _settings.activeEndpointId;
   ApiModelEndpoint? get activeEndpoint => _settings.activeEndpoint;
+  String get syncUserId => _settings.loginAccount.trim().isNotEmpty ? _settings.loginAccount.trim() : 'default_user';
 
   void toggleTheme() {
     _settings.isDarkMode = !_settings.isDarkMode;
@@ -61,6 +64,41 @@ class SettingsProvider extends ChangeNotifier {
 
   void updateSettings(AppSettings newSettings) {
     _settings = newSettings;
+    _save();
+  }
+
+  /// 用户登录验证
+  bool login(String account, String password) {
+    // 若尚未设置密码，或者账号与密码匹配则允许登录
+    if (_settings.loginAccount.isEmpty) {
+      // 尚未注册账号，提示需先注册
+      return false;
+    }
+    if (_settings.loginAccount == account &&
+        (_settings.accountPassword.isEmpty || _settings.accountPassword == password)) {
+      _settings.isLoggedIn = true;
+      _save();
+      return true;
+    }
+    return false;
+  }
+
+  /// 用户注册
+  void register({
+    required String account,
+    required String userName,
+    required String password,
+  }) {
+    _settings.loginAccount = account.trim();
+    _settings.userName = userName.trim().isNotEmpty ? userName.trim() : '用户_${account.trim()}';
+    _settings.accountPassword = password;
+    _settings.isLoggedIn = true;
+    _save();
+  }
+
+  /// 退出登录
+  void logout() {
+    _settings.isLoggedIn = false;
     _save();
   }
 

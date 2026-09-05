@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/bridge_script_helper.dart';
 
 class HarnessSettingsScreen extends StatefulWidget {
   const HarnessSettingsScreen({super.key});
@@ -35,6 +36,30 @@ class _HarnessSettingsScreenState extends State<HarnessSettingsScreen> {
     }
     _harnessUrlCtrl = TextEditingController(text: urlText);
     _workspaceCtrl = TextEditingController(text: s.targetWorkspace);
+
+    _tokenCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.harnessToken = _tokenCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
+
+    _harnessUrlCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      var rawUrl = _harnessUrlCtrl.text.trim();
+      if (rawUrl.isEmpty) rawUrl = '127.0.0.1:3081';
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        sp.settings.harnessServiceUrl = 'http://$rawUrl';
+      } else {
+        sp.settings.harnessServiceUrl = rawUrl;
+      }
+      sp.updateSettings(sp.settings);
+    });
+
+    _workspaceCtrl.addListener(() {
+      final sp = context.read<SettingsProvider>();
+      sp.settings.targetWorkspace = _workspaceCtrl.text.trim();
+      sp.updateSettings(sp.settings);
+    });
   }
 
   @override
@@ -289,7 +314,7 @@ class _HarnessSettingsScreenState extends State<HarnessSettingsScreen> {
           ),
           const SizedBox(height: 16),
 
-          // 本地启动程序引导
+          // 本地启动程序与脚本导出
           Card(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
@@ -312,21 +337,80 @@ class _HarnessSettingsScreenState extends State<HarnessSettingsScreen> {
                       style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      icon: const Icon(Icons.copy, size: 16),
-                      label: const Text('复制命令'),
-                      onPressed: () {
-                        Clipboard.setData(ClipboardData(
-                          text: 'python deepseek_bridge.py --token "${_tokenCtrl.text.trim()}" --harness-url "${_harnessUrlCtrl.text.trim()}"',
-                        ));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('启动命令已复制')),
-                        );
-                      },
-                    ),
+                  const SizedBox(height: 12),
+                  // 一键工具组：下载 py 脚本、下载 bat 脚本、复制命令
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.end,
+                    children: [
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.code, size: 16, color: Color(0xFF0284C7)),
+                        label: const Text('下载 py 脚本', style: TextStyle(fontSize: 13)),
+                        onPressed: () async {
+                          final pyContent = BridgeScriptHelper.generatePyContent();
+                          final path = await BridgeScriptHelper.saveFileToDevice(
+                            fileName: 'deepseek_bridge.py',
+                            content: pyContent,
+                          );
+                          if (mounted) {
+                            if (path != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('已成功保存 deepseek_bridge.py 到：$path')),
+                              );
+                            } else {
+                              Clipboard.setData(ClipboardData(text: pyContent));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('已将 deepseek_bridge.py 完整代码复制到剪贴板')),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.terminal, size: 16, color: Color(0xFF0284C7)),
+                        label: const Text('下载 bat 脚本', style: TextStyle(fontSize: 13)),
+                        onPressed: () async {
+                          final batContent = BridgeScriptHelper.generateBatContent(
+                            token: _tokenCtrl.text.trim(),
+                            serverUrl: 'https://lx00924ai.top',
+                            harnessUrl: 'http://${_harnessUrlCtrl.text.trim()}',
+                          );
+                          final path = await BridgeScriptHelper.saveFileToDevice(
+                            fileName: 'run_bridge.bat',
+                            content: batContent,
+                          );
+                          if (mounted) {
+                            if (path != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('已成功保存 run_bridge.bat 到：$path')),
+                              );
+                            } else {
+                              Clipboard.setData(ClipboardData(text: batContent));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('已将 run_bridge.bat 完整脚本复制到剪贴板')),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0284C7),
+                          foregroundColor: Colors.white,
+                        ),
+                        icon: const Icon(Icons.copy, size: 16),
+                        label: const Text('复制命令', style: TextStyle(fontSize: 13)),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(
+                            text: 'python deepseek_bridge.py --token "${_tokenCtrl.text.trim()}" --harness-url "${_harnessUrlCtrl.text.trim()}"',
+                          ));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('启动命令已复制')),
+                          );
+                        },
+                      ),
+                    ],
                   ),
                 ],
               ),
