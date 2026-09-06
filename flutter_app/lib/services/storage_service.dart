@@ -120,6 +120,31 @@ class StorageService {
     return list;
   }
 
+  int getMessageCountForSession(String sessionId) {
+    final box = _messagesBox;
+    if (box == null) return 0;
+    int count = 0;
+    for (var key in box.keys) {
+      final val = box.get(key);
+      if (val != null && (val['sessionId'] == sessionId || (val is Map && val['sessionId'] == sessionId))) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /// 导出指定会话列表的数据（选中的会话 + 对应消息）
+  Map<String, dynamic> exportSelectedSessions(List<String> sessionIds) {
+    final allSessions = getAllSessions().where((s) => sessionIds.contains(s.id)).toList();
+    final allMessages = getAllMessages().where((m) => sessionIds.contains(m.sessionId)).toList();
+    return {
+      'version': '1.0.0',
+      'exportTime': DateTime.now().toIso8601String(),
+      'sessions': allSessions.map((s) => s.toMap()).toList(),
+      'messages': allMessages.map((m) => m.toMap()).toList(),
+    };
+  }
+
   /// 导出全部对话数据（会话 + 消息）
   Map<String, dynamic> exportAllData() {
     final sessions = getAllSessions();

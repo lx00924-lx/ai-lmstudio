@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
+import '../models/app_settings.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import 'storage_service.dart';
 
-/// 后台静默实时同步服务：实现 Flutter 客户端与服务端的自动增量同步
+/// 后台静默实时同步服务：实现 Flutter 客户端与服务端的自动增量同步及多端互斥下线监控
 class SyncService {
   static final SyncService instance = SyncService._();
   SyncService._();
@@ -19,6 +20,8 @@ class SyncService {
   );
 
   bool _isSyncing = false;
+  Timer? _sessionWatcherTimer;
+  void Function(String reason)? onForceLogout;
 
   /// 获取服务器基地址（Web 端自适应 origin，App 原生端连接生产服务端）
   String get serverBaseUrl {
@@ -32,9 +35,197 @@ class SyncService {
     return 'https://lx00924ai.top';
   }
 
+  /// 统一注入设备与会话识别头
+  Options _createOptions({
+    String? userId,
+    String? clientSessionId,
+    String? deviceType,
+  }) {
+    return Options(
+      headers: {
+        if (userId != null && userId.isNotEmpty) 'x-user-id': userId,
+        'x-device-type': deviceType ?? AppSettings.currentDeviceType,
+        if (clientSessionId != null && clientSessionId.isNotEmpty) 'x-client-session-id': clientSessionId,
+      },
+    );
+  }
+
+  void _checkAndTriggerForceLogout(dynamic error) {
+    if (error is DioException && error.response?.statusCode == 401) {
+      final data = error.response?.data;
+      if (data is Map && data['error'] == 'FORCE_LOGOUT') {
+        final reason = data['reason']?.toString() ?? '您的账号已在另一台设备上登录，当前设备已被下线。';
+        stopSessionWatcher();
+        onForceLogout?.call(reason);
+      }
+    }
+  }
+
+  /// 启动多端单点登录心跳监听（1手机 + 1电脑互斥）
+  void startSessionWatcher({
+    required String userId,
+    required String clientSessionId,
+    required String deviceType,
+    required void Function(String reason) onKicked,
+  }) {
+    stopSessionWatcher();
+    final cleanUserId = userId.trim();
+    if (cleanUserId.isEmpty || cleanUserId == 'guest' || cleanUserId == 'default_user') {
+      return;
+    }
+
+    onForceLogout = onKicked;
+
+    // 立即执行一次健康核验
+    _checkSessionOnce(cleanUserId, clientSessionId, deviceType);
+
+    // 每 4 秒轮询一次当前设备会话状态
+    _sessionWatcherTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _checkSessionOnce(cleanUserId, clientSessionId, deviceType);
+    });
+  }
+
+  /// 停止多端登录监控
+  void stopSessionWatcher() {
+    _sessionWatcherTimer?.cancel();
+    _sessionWatcherTimer = null;
+  }
+
+  Future<void> _checkSessionOnce(String userId, String clientSessionId, String deviceType) async {
+    try {
+      final url = '$serverBaseUrl/api/check-session';
+      final response = await _dio.get(
+        url,
+        queryParameters: {
+          'userId': userId,
+          'deviceType': deviceType,
+          'clientSessionId': clientSessionId,
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = response.data;
+        if (data is Map && data['valid'] == false) {
+          final reason = data['reason']?.toString() ?? '您的账号已在另一台设备上登录，当前设备已被下线。';
+          stopSessionWatcher();
+          onForceLogout?.call(reason);
+        }
+      }
+    } catch (e) {
+      _checkAndTriggerForceLogout(e);
+    }
+  }
+
+  /// 客户端向服务端发起登录认证，并注册当前设备的唯一会话 ID
+  Future<Map<String, dynamic>> loginWithServer({
+    required String username,
+    required String password,
+    required String clientSessionId,
+    required String deviceType,
+  }) async {
+    try {
+      final url = '$serverBaseUrl/api/login';
+      final response = await _dio.post(
+        url,
+        data: {
+          'username': username.trim(),
+          'password': password,
+          'deviceType': deviceType,
+          'clientSessionId': clientSessionId,
+        },
+      );
+
+      if (response.statusCode == 200 && response.data is Map) {
+        return {
+          'success': true,
+          'data': response.data,
+        };
+      }
+      return {
+        'success': false,
+        'message': '登录失败，请检查网络后重试',
+      };
+    } catch (e) {
+      if (e is DioException && e.response?.data is Map) {
+        final err = e.response!.data['error']?.toString();
+        return {
+          'success': false,
+          'message': err ?? '账号或密码错误',
+        };
+      }
+      return {
+        'success': false,
+        'message': '无法连接到服务器，请检查网络连接',
+      };
+    }
+  }
+
+  /// 客户端向服务端发起注册
+  Future<Map<String, dynamic>> registerWithServer({
+    required String username,
+    required String password,
+  }) async {
+    try {
+      final url = '$serverBaseUrl/api/register';
+      final response = await _dio.post(
+        url,
+        data: {
+          'username': username.trim(),
+          'password': password,
+        },
+      );
+
+      if (response.statusCode == 200 && response.data is Map) {
+        return {
+          'success': true,
+          'data': response.data,
+        };
+      }
+      return {
+        'success': false,
+        'message': '注册失败，请稍后重试',
+      };
+    } catch (e) {
+      if (e is DioException && e.response?.data is Map) {
+        final err = e.response!.data['error']?.toString();
+        return {
+          'success': false,
+          'message': err ?? '注册失败，该用户名可能已被占用',
+        };
+      }
+      return {
+        'success': false,
+        'message': '无法连接到服务器，请检查网络连接',
+      };
+    }
+  }
+
+  /// 客户端主动登出通知服务端释放当前设备槽位
+  Future<void> logoutServer({
+    required String username,
+    required String clientSessionId,
+    required String deviceType,
+  }) async {
+    stopSessionWatcher();
+    try {
+      final url = '$serverBaseUrl/api/logout';
+      await _dio.post(
+        url,
+        data: {
+          'username': username.trim(),
+          'clientSessionId': clientSessionId,
+          'deviceType': deviceType,
+        },
+      );
+    } catch (e) {
+      debugPrint('[SyncService] Logout server error: $e');
+    }
+  }
+
   /// 后台静默从服务器拉取历史消息并合并到本地 Hive
   Future<int> pullAndMergeMessages({
     required String userId,
+    String? clientSessionId,
     Function()? onNewMessagesImported,
   }) async {
     final cleanUserId = userId.trim();
@@ -44,7 +235,10 @@ class SyncService {
 
     try {
       final url = '$serverBaseUrl/api/messages/$cleanUserId';
-      final response = await _dio.get(url);
+      final response = await _dio.get(
+        url,
+        options: _createOptions(userId: cleanUserId, clientSessionId: clientSessionId),
+      );
 
       if (response.statusCode == 200 && response.data is List) {
         final list = response.data as List;
@@ -93,7 +287,7 @@ class SyncService {
         }
       }
     } catch (e) {
-      // 静默处理，不中断任何前台交互
+      _checkAndTriggerForceLogout(e);
       debugPrint('[SyncService] Pull messages silent error: $e');
     } finally {
       _isSyncing = false;
@@ -106,11 +300,11 @@ class SyncService {
   Future<void> pushMessages({
     required String userId,
     required List<ChatMessage> messages,
+    String? clientSessionId,
   }) async {
     final cleanUserId = userId.trim();
     if (cleanUserId.isEmpty || messages.isEmpty) return;
 
-    // 过滤掉未生成完的空流式消息
     final validMessages = messages
         .where((m) => !m.isStreaming && (m.content.isNotEmpty || (m.attachments != null && m.attachments!.isNotEmpty)))
         .map((m) => m.toMap())
@@ -126,9 +320,40 @@ class SyncService {
           'userId': cleanUserId,
           'messages': validMessages,
         },
+        options: _createOptions(userId: cleanUserId, clientSessionId: clientSessionId),
       );
     } catch (e) {
+      _checkAndTriggerForceLogout(e);
       debugPrint('[SyncService] Push messages silent error: $e');
+    }
+  }
+
+  /// 请求服务器后台托管异步生成，确保 App 强杀/切后台后服务器继续完成回复落盘
+  Future<void> requestServerBackgroundGeneration({
+    required String userId,
+    required String assistantMessageId,
+    required List<ChatMessage> messages,
+    required Map<String, dynamic> settings,
+    String? clientSessionId,
+  }) async {
+    final cleanUserId = userId.trim();
+    if (cleanUserId.isEmpty || assistantMessageId.isEmpty) return;
+
+    try {
+      final url = '$serverBaseUrl/api/chat/generate';
+      await _dio.post(
+        url,
+        data: {
+          'userId': cleanUserId,
+          'assistantMessageId': assistantMessageId,
+          'messages': messages.map((m) => m.toMap()).toList(),
+          'settings': settings,
+        },
+        options: _createOptions(userId: cleanUserId, clientSessionId: clientSessionId),
+      );
+    } catch (e) {
+      _checkAndTriggerForceLogout(e);
+      debugPrint('[SyncService] Server background gen request: $e');
     }
   }
 
@@ -136,6 +361,7 @@ class SyncService {
   Future<void> deleteMessage({
     required String userId,
     required String messageId,
+    String? clientSessionId,
   }) async {
     final cleanUserId = userId.trim();
     final cleanMessageId = messageId.trim();
@@ -149,8 +375,10 @@ class SyncService {
           'userId': cleanUserId,
           'messageId': cleanMessageId,
         },
+        options: _createOptions(userId: cleanUserId, clientSessionId: clientSessionId),
       );
     } catch (e) {
+      _checkAndTriggerForceLogout(e);
       debugPrint('[SyncService] Delete message silent error: $e');
     }
   }
@@ -159,6 +387,7 @@ class SyncService {
   Future<void> deleteSession({
     required String userId,
     required String sessionId,
+    String? clientSessionId,
   }) async {
     final cleanUserId = userId.trim();
     final cleanSessionId = sessionId.trim();
@@ -172,8 +401,10 @@ class SyncService {
           'userId': cleanUserId,
           'sessionId': cleanSessionId,
         },
+        options: _createOptions(userId: cleanUserId, clientSessionId: clientSessionId),
       );
     } catch (e) {
+      _checkAndTriggerForceLogout(e);
       debugPrint('[SyncService] Delete session silent error: $e');
     }
   }

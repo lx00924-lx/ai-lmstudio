@@ -11,7 +11,7 @@ import { Message, AppSettings } from '../../types';
 import { cn, formatMessageDate } from '../../lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { motion, AnimatePresence } from 'motion/react';
-import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2, ChevronDown, Square } from 'lucide-react';
+import { Bot, User, Mic, CheckCircle2, Circle, Play, Pause, Copy, Quote, Languages, RefreshCcw, Target, Trash2, ChevronDown, Square, AlertCircle } from 'lucide-react';
 import { API_BASE_URL } from '../../config';
 import { Clipboard } from '@capacitor/clipboard';
 import { Toast } from '@capacitor/toast';
@@ -207,6 +207,7 @@ interface MessageListProps {
   onQuote?: (message: Message) => void;
   onTranscribe?: (message: Message) => void;
   onDelete?: (id: string) => void;
+  onResendMessage?: (id: string) => void;
 }
 
 const MessageItem: React.FC<{
@@ -228,6 +229,7 @@ const MessageItem: React.FC<{
   scrollToMessage: (id: string) => void;
   messageRef?: (el: HTMLDivElement | null) => void;
   onRegisterReplay?: (id: string, play: () => void) => void;
+  onResendMessage?: (id: string) => void;
 }> = ({
   message,
   isSelected,
@@ -246,7 +248,8 @@ const MessageItem: React.FC<{
   onClick,
   scrollToMessage,
   messageRef,
-  onRegisterReplay
+  onRegisterReplay,
+  onResendMessage
 }) => {
   // 动态字号样式映射
   const fontSizeClasses = {
@@ -487,6 +490,20 @@ const MessageItem: React.FC<{
           {formatMessageDate(message.timestamp)}
         </span>
       </div>
+
+      {message.role === 'user' && message.status === 'error' && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onResendMessage?.(message.id);
+          }}
+          className="self-center p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-full transition-colors cursor-pointer"
+          title="发送失败，点击重新发送"
+        >
+          <AlertCircle className="w-5 h-5 text-red-500 animate-pulse" />
+        </button>
+      )}
     </motion.div>
   );
 };
@@ -504,7 +521,8 @@ export const MessageList: React.FC<MessageListProps> = ({
   onEnterSelectionMode,
   onQuote,
   onTranscribe,
-  onDelete
+  onDelete,
+  onResendMessage
 }) => {
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
@@ -813,6 +831,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             scrollToMessage={scrollToMessage}
             messageRef={(el) => { messageRefs.current[message.id] = el; }}
             onRegisterReplay={(id, play) => { replayRefs.current[id] = play; }}
+            onResendMessage={onResendMessage}
           />
         ))}
         

@@ -140,6 +140,7 @@ class ApiService {
   Stream<Map<String, dynamic>> streamChatCompletion({
     required List<ChatMessage> history,
     required AppSettings settings,
+    CancelToken? cancelToken,
   }) async* {
     final activeEp = settings.activeEndpoint;
     if (activeEp == null) {
@@ -184,6 +185,7 @@ class ApiService {
     final response = await _dio.post<ResponseBody>(
       requestUrl,
       data: requestBody,
+      cancelToken: cancelToken,
       options: Options(
         headers: {
           if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',

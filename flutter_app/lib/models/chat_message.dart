@@ -12,6 +12,7 @@ class ChatMessage {
   bool isStreaming;
   int? elapsedSeconds;
   List<String>? attachments;
+  String status; // 'completed' | 'error' | 'sending'
 
   ChatMessage({
     required this.id,
@@ -23,6 +24,7 @@ class ChatMessage {
     this.isStreaming = false,
     this.elapsedSeconds,
     this.attachments,
+    this.status = 'completed',
   }) : createdAt = createdAt ?? DateTime.now();
 
   Map<String, dynamic> toMap() {
@@ -39,6 +41,7 @@ class ChatMessage {
       'timestamp': createdAt.toIso8601String(),
       'elapsedSeconds': elapsedSeconds,
       'attachments': attachments,
+      'status': status,
     };
   }
 
@@ -70,6 +73,7 @@ class ChatMessage {
       createdAt: createdAt,
       elapsedSeconds: map['elapsedSeconds'] as int?,
       attachments: (map['attachments'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
+      status: map['status']?.toString() ?? 'completed',
     );
   }
 

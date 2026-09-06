@@ -202,7 +202,14 @@ export default function App() {
   const handleLogin = async (userData: { id: string; username: string }) => {
     setUser(userData);
     try { localStorage.setItem('app_user', JSON.stringify(userData)); } catch (_) {}
-    try { socket.emit("join_user_room", userData.id); } catch (_) {}
+    try {
+      const clientSessionId = localStorage.getItem('chat_client_session_id');
+      socket.emit("join_user_room", {
+        userId: userData.id,
+        deviceType: 'desktop',
+        clientSessionId,
+      });
+    } catch (_) {}
 
     // 1. 读取当前用户本地已有的记录，若为空则将游客记录迁移过来
     const userKey = getMessageStorageKey(userData.id);
@@ -258,6 +265,19 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    const clientSessionId = localStorage.getItem('chat_client_session_id');
+    if (user && user.id && user.id !== 'guest') {
+      fetch(`${API_BASE_URL}/api/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          deviceType: 'desktop',
+          clientSessionId,
+        }),
+      }).catch(() => {});
+    }
+
     setUser(null);
     try { localStorage.removeItem('app_user'); } catch (_) {}
     const guestRaw = localStorage.getItem('guest_messages');
@@ -291,7 +311,14 @@ export default function App() {
 
     const syncWithServer = async () => {
       try {
-        try { socket.emit("join_user_room", user.id); } catch (_) {}
+        try {
+          const clientSessionId = localStorage.getItem('chat_client_session_id');
+          socket.emit("join_user_room", {
+            userId: user.id,
+            deviceType: 'desktop',
+            clientSessionId,
+          });
+        } catch (_) {}
 
         const [msgRes, settingsRes] = await Promise.allSettled([
           fetch(`${API_BASE_URL}/api/messages/${user.id}`).then(r => r.ok ? r.json() : Promise.reject('Failed to fetch messages')),
@@ -472,7 +499,37 @@ export default function App() {
       setState(prev => ({ ...prev, settings: { ...DEFAULT_SETTINGS, ...(prev.settings || {}), ...newSettings } }));
     });
 
+    const onForceLogout = (data: any) => {
+      console.warn("Received force_logout event:", data);
+      const currentSessionId = localStorage.getItem('chat_client_session_id');
+      if (data?.kickedSessionId && currentSessionId && data.kickedSessionId !== currentSessionId) {
+        return;
+      }
+      const reason = data?.reason || "您的账号已在另一台电脑上登录，当前设备已被强制下线。";
+      alert(reason);
+      handleLogout();
+    };
+
+    socket.on("force_logout", onForceLogout);
+
+    // 周期性验证心跳，若在另一台同类型设备（电脑）上登录，静默检测并退出
+    const sessionTimer = setInterval(async () => {
+      try {
+        const clientSessionId = localStorage.getItem('chat_client_session_id');
+        if (!clientSessionId || !user || user.id === 'guest') return;
+        const res = await fetch(
+          `${API_BASE_URL}/api/check-session?userId=${encodeURIComponent(user.id)}&deviceType=desktop&clientSessionId=${encodeURIComponent(clientSessionId)}`
+        );
+        if (res.status === 401) {
+          const data = await res.json().catch(() => ({}));
+          alert(data.reason || "您的账号已在另一台电脑上登录，当前设备已被下线。");
+          handleLogout();
+        }
+      } catch (_) {}
+    }, 5000);
+
     return () => {
+      clearInterval(sessionTimer);
       socket.off("connect", handleConnect);
       socket.off("receive_message");
       socket.off("chat_chunk");
@@ -481,6 +538,7 @@ export default function App() {
       socket.off("message_deleted");
       socket.off("messages_updated");
       socket.off("settings_updated");
+      socket.off("force_logout", onForceLogout);
     };
   }, [user]);
 
@@ -1228,6 +1286,8 @@ export default function App() {
       }
     }
 
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -1236,6 +1296,7 @@ export default function App() {
       type,
       mediaUrl,
       transcribedText,
+      status: isOffline ? 'error' : 'completed',
       isAgentMode: !!state.settings.agentMode,
       quote: quotedMessage ? {
         id: quotedMessage.id,
@@ -1246,6 +1307,15 @@ export default function App() {
     };
 
     setQuotedMessage(null); // Clear quote after sending
+
+    if (isOffline) {
+      // 离线状态：消息落入本地历史并展示红色失败感叹号，不上报网络服务
+      setState(prev => ({
+        ...prev,
+        messages: [...prev.messages, userMessage]
+      }));
+      return;
+    }
 
     if (!state.settings.apiKey && !process.env.GEMINI_API_KEY) {
       setState(prev => ({ ...prev, error: "请在设置中配置 API Key 以开始聊天。" }));
@@ -1269,6 +1339,37 @@ export default function App() {
       runGeminiQuery([...state.messages, userMessage]);
     }
   }, [state.messages, state.settings, quotedMessage, state.isLoading, runGeminiQuery, user]);
+
+  const handleResendMessage = useCallback(async (messageId: string) => {
+    const targetMsg = state.messages.find(m => m.id === messageId);
+    if (!targetMsg || targetMsg.role !== 'user') return;
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      await Toast.show({ text: "网络仍未连接，请检查网络通畅度后重试" });
+      return;
+    }
+
+    const updatedMsg: Message = {
+      ...targetMsg,
+      status: 'completed',
+    };
+
+    const updatedMessages = state.messages.map(m => m.id === messageId ? updatedMsg : m);
+    setState(prev => ({
+      ...prev,
+      messages: updatedMessages
+    }));
+
+    if (user && user.id !== 'guest') {
+      socket.emit("send_message", { userId: user.id, message: updatedMsg });
+    }
+
+    if (state.isLoading) {
+      queueRef.current.push(updatedMsg);
+    } else {
+      runGeminiQuery(updatedMessages);
+    }
+  }, [state.messages, state.isLoading, user, runGeminiQuery]);
 
   const handleCallEnd = useCallback((newMessages: Message[]) => {
     if (newMessages.length === 0) return;
@@ -1843,6 +1944,7 @@ function compareSemVer(v1: string, v2: string): number {
             onQuote={handleQuote}
             onTranscribe={handleTranscribe}
             onDelete={handleDeleteMessage}
+            onResendMessage={handleResendMessage}
           />
 
           {/* Input Area */}

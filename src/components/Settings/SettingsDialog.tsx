@@ -2078,11 +2078,15 @@ if %errorlevel% neq 0 (
       clearTimeout(timeoutId);
 
       if (res.ok) {
-        setHttpTestStatus({ type: 'success', message: '连接成功：语音转写接口响应正常' });
+        const data = await res.json().catch(() => ({}));
+        const preview = data.text || data.result ? ` [返回: ${(data.text || data.result).substring(0, 40)}]` : '';
+        setHttpTestStatus({ type: 'success', message: `连接成功：语音转写接口响应正常${preview}` });
       } else {
         const data = await res.json().catch(() => ({}));
-        if (res.status === 400 || res.status === 405 || res.status === 200) {
-          setHttpTestStatus({ type: 'success', message: '连接成功：转写服务在线' });
+        if (res.status === 401 || res.status === 403) {
+          setHttpTestStatus({ type: 'error', message: `鉴权失败 (HTTP ${res.status})：API Key 无效或未授权` });
+        } else if (res.status === 404) {
+          setHttpTestStatus({ type: 'error', message: '接口地址不存在 (HTTP 404)，请检查端点 URL 路径' });
         } else {
           setHttpTestStatus({ type: 'error', message: `服务返回状态码 ${res.status}${data.error ? `: ${data.error}` : ''}` });
         }

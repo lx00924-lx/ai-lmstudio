@@ -142,6 +142,29 @@ class MessageBubble extends StatelessWidget {
             ),
             const SizedBox(width: 10),
           ],
+          if (isUser && message.status == 'error') ...[
+            Padding(
+              padding: const EdgeInsets.only(right: 6, top: 10),
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.error, color: Colors.redAccent, size: 22),
+                tooltip: '发送失败，点击重新发送',
+                onPressed: () async {
+                  final success = await chat.resendMessage(message.id);
+                  if (!success && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('网络仍未连接，请检查网络通畅度后重试'),
+                        backgroundColor: Colors.redAccent,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+              ),
+            ),
+          ],
           Flexible(
             child: GestureDetector(
               onLongPress: () => _showMessageActionSheet(context),

@@ -30,11 +30,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onLogin }) => {
     try {
       const baseUrl = API_BASE_URL;
       const endpoint = isRegister ? '/api/register' : '/api/login';
+      const clientSessionId = localStorage.getItem('chat_client_session_id') || `web_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      localStorage.setItem('chat_client_session_id', clientSessionId);
+
       console.log(`Sending request to ${baseUrl}${endpoint}`);
       const res = await fetch(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({
+          username,
+          password,
+          deviceType: 'desktop',
+          clientSessionId,
+        }),
       });
 
       const data = await res.json();

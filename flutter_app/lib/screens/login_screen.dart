@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/chat_provider.dart';
 import 'chat_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -25,6 +26,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _regConfirmPasswordCtrl = TextEditingController();
   bool _obscureRegPassword = true;
   bool _obscureRegConfirmPassword = true;
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -47,7 +49,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _handleLogin() {
+  void _handleLogin() async {
     final account = _loginAccountCtrl.text.trim();
     final password = _loginPasswordCtrl.text;
 
@@ -57,22 +59,22 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       return;
     }
-
-    final sp = context.read<SettingsProvider>();
-    // 如果系统内尚无注册记录
-    if (sp.settings.loginAccount.isEmpty) {
+    if (password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('尚未注册账号，请点击右上角「新用户注册」创建账号'),
-          backgroundColor: Colors.orange,
-        ),
+        const SnackBar(content: Text('请输入登录密码')),
       );
-      setState(() => _tabIndex = 1);
       return;
     }
 
-    final success = sp.login(account, password);
-    if (success) {
+    setState(() => _isLoading = true);
+    final sp = context.read<SettingsProvider>();
+    final result = await sp.loginWithServer(account, password);
+
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    if (result['success'] == true) {
+      context.read<ChatProvider>().reloadFromStorage();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('欢迎回来，${sp.settings.userName}！')),
       );
@@ -81,15 +83,15 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('账号或密码不正确，请重新输入'),
+        SnackBar(
+          content: Text(result['message']?.toString() ?? '账号或密码不正确，请重新输入'),
           backgroundColor: Colors.redAccent,
         ),
       );
     }
   }
 
-  void _handleRegister() {
+  void _handleRegister() async {
     final account = _regAccountCtrl.text.trim();
     final userName = _regUserNameCtrl.text.trim();
     final password = _regPasswordCtrl.text;
@@ -117,20 +119,35 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    setState(() => _isLoading = true);
     final sp = context.read<SettingsProvider>();
-    sp.register(
+    final result = await sp.registerWithServer(
       account: account,
       userName: userName.isNotEmpty ? userName : account,
       password: password,
     );
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('注册成功！欢迎您，$account')),
-    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
 
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const ChatScreen()),
-    );
+    if (result['success'] == true) {
+      context.read<ChatProvider>().reloadFromStorage();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('注册成功！欢迎您，$account')),
+      );
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const ChatScreen()),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message']?.toString() ?? '注册失败，请稍后重试'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   @override
@@ -347,11 +364,17 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             elevation: 2,
           ),
-          onPressed: _handleLogin,
-          child: const Text(
-            '立即登录',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
+          onPressed: _isLoading ? null : _handleLogin,
+          child: _isLoading
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Text(
+                  '立即登录',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
         ),
         const SizedBox(height: 16),
         TextButton(
@@ -464,11 +487,17 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             elevation: 2,
           ),
-          onPressed: _handleRegister,
-          child: const Text(
-            '注册并开启体验',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-          ),
+          onPressed: _isLoading ? null : _handleRegister,
+          child: _isLoading
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                )
+              : const Text(
+                  '注册并开启体验',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
         ),
         const SizedBox(height: 14),
         TextButton(

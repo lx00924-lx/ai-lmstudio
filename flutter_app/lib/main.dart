@@ -8,6 +8,9 @@ import 'screens/chat_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/splash_screen.dart';
 
+/// 全局导航 Key，供服务层在收到顶号通知时安全弹窗与跳转
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -62,6 +65,7 @@ class DeepSeekNativeApp extends StatelessWidget {
     final settings = context.watch<SettingsProvider>();
 
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'DeepSeek Native AI',
       debugShowCheckedModeBanner: false,
       themeMode: settings.isDarkMode ? ThemeMode.dark : ThemeMode.light,

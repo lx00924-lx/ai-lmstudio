@@ -1,5 +1,9 @@
+import 'dart:async';
+import 'dart:typed_data';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../providers/settings_provider.dart';
 
 class AsrSettingsScreen extends StatefulWidget {
@@ -14,7 +18,9 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
   late TextEditingController _wsCtrl;
   late TextEditingController _modelCtrl;
   late TextEditingController _keyCtrl;
-  late TextEditingController _ctxCtrl;
+
+  bool _isTestingHttp = false;
+  bool _isTestingWs = false;
 
   @override
   void initState() {
@@ -24,7 +30,6 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
     _wsCtrl = TextEditingController(text: s.asrWsEndpoint);
     _modelCtrl = TextEditingController(text: s.asrModel);
     _keyCtrl = TextEditingController(text: s.asrApiKey);
-    _ctxCtrl = TextEditingController(text: s.asrContextLength.toString());
 
     _httpCtrl.addListener(() {
       final sp = context.read<SettingsProvider>();
@@ -49,15 +54,6 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
       sp.settings.asrApiKey = _keyCtrl.text.trim();
       sp.updateSettings(sp.settings);
     });
-
-    _ctxCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      final val = int.tryParse(_ctxCtrl.text.trim());
-      if (val != null) {
-        sp.settings.asrContextLength = val;
-        sp.updateSettings(sp.settings);
-      }
-    });
   }
 
   @override
@@ -66,7 +62,6 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
     _wsCtrl.dispose();
     _modelCtrl.dispose();
     _keyCtrl.dispose();
-    _ctxCtrl.dispose();
     super.dispose();
   }
 
@@ -101,11 +96,193 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
     s.asrWsEndpoint = _wsCtrl.text.trim();
     s.asrModel = _modelCtrl.text.trim();
     s.asrApiKey = _keyCtrl.text.trim();
-    s.asrContextLength = int.tryParse(_ctxCtrl.text.trim()) ?? 30000;
     sp.updateSettings(s);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('语音转写设置已保存')),
     );
+  }
+
+  Uint8List _createSilentWav() {
+    // 构造合法的 16kHz 16位 单声道 0.1秒 静音 WAV
+    const sampleRate = 16000;
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const numSamples = 1600;
+    const dataSize = numSamples * numChannels * (bitsPerSample ~/ 8);
+    final totalSize = 36 + dataSize;
+
+    final bytes = ByteData(44 + dataSize);
+    // "RIFF"
+    bytes.setUint8(0, 0x52); bytes.setUint8(1, 0x49); bytes.setUint8(2, 0x46); bytes.setUint8(3, 0x46);
+    bytes.setUint32(4, totalSize, Endian.little);
+    // "WAVE"
+    bytes.setUint8(8, 0x57); bytes.setUint8(9, 0x41); bytes.setUint8(10, 0x56); bytes.setUint8(11, 0x45);
+    // "fmt "
+    bytes.setUint8(12, 0x66); bytes.setUint8(13, 0x6D); bytes.setUint8(14, 0x74); bytes.setUint8(15, 0x20);
+    bytes.setUint32(16, 16, Endian.little);
+    bytes.setUint16(20, 1, Endian.little);
+    bytes.setUint16(22, numChannels, Endian.little);
+    bytes.setUint32(24, sampleRate, Endian.little);
+    bytes.setUint32(28, sampleRate * numChannels * (bitsPerSample ~/ 8), Endian.little);
+    bytes.setUint16(32, numChannels * (bitsPerSample ~/ 8), Endian.little);
+    bytes.setUint16(34, bitsPerSample, Endian.little);
+    // "data"
+    bytes.setUint8(36, 0x64); bytes.setUint8(37, 0x61); bytes.setUint8(38, 0x74); bytes.setUint8(39, 0x61);
+    bytes.setUint32(40, dataSize, Endian.little);
+
+    return bytes.buffer.asUint8List();
+  }
+
+  Future<void> _testHttp() async {
+    final endpoint = _httpCtrl.text.trim();
+    if (endpoint.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先输入转写 HTTP 接口地址')),
+      );
+      return;
+    }
+
+    setState(() => _isTestingHttp = true);
+    final stopwatch = Stopwatch()..start();
+
+    try {
+      final wavBytes = _createSilentWav();
+      final model = _modelCtrl.text.trim();
+      final apiKey = _keyCtrl.text.trim();
+
+      final formData = FormData.fromMap({
+        'file': MultipartFile.fromBytes(wavBytes, filename: 'test.wav'),
+        'audio': MultipartFile.fromBytes(wavBytes, filename: 'test.wav'),
+        'audio_in': MultipartFile.fromBytes(wavBytes, filename: 'test.wav'),
+        if (model.isNotEmpty) 'model': model,
+      });
+
+      final headers = <String, dynamic>{};
+      if (apiKey.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $apiKey';
+        headers['x-asr-api-key'] = apiKey;
+      }
+
+      final dio = Dio(BaseOptions(
+        connectTimeout: const Duration(seconds: 12),
+        receiveTimeout: const Duration(seconds: 15),
+        headers: headers,
+      ));
+
+      final res = await dio.post(endpoint, data: formData);
+      final ms = stopwatch.elapsedMilliseconds;
+
+      if (!mounted) return;
+
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        final data = res.data;
+        String previewText = '';
+        if (data is Map) {
+          previewText = (data['text'] ?? data['result'] ?? '').toString();
+        } else if (data is String) {
+          previewText = data.length > 50 ? data.substring(0, 50) : data;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('连接成功：语音转写接口连通正常 (耗时 ${ms}ms)${previewText.isNotEmpty ? " [返回: $previewText]" : ""}'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('服务返回异常状态码: ${res.statusCode}'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } on DioException catch (e) {
+      if (!mounted) return;
+      String errHint = '请求失败';
+      if (e.response != null) {
+        final code = e.response!.statusCode;
+        if (code == 401 || code == 403) {
+          errHint = '鉴权失败 (HTTP $code)：API Key 无效或未授权';
+        } else if (code == 404) {
+          errHint = '接口不存在 (HTTP 404)：请检查接口 URL 是否正确';
+        } else {
+          final resData = e.response?.data;
+          errHint = '服务端返回错误 (HTTP $code): ${resData is Map ? (resData['error'] ?? resData['message'] ?? code) : code}';
+        }
+      } else if (e.type == DioExceptionType.connectionTimeout || e.type == DioExceptionType.receiveTimeout) {
+        errHint = '连接超时：请检查服务地址是否可达及网络通畅度';
+      } else if (e.type == DioExceptionType.connectionError) {
+        errHint = '连接失败：无法访问该 IP/端口 (Connection Refused 或网络不可达)';
+      } else {
+        errHint = '网络异常: ${e.message ?? e.toString()}';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errHint),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('测试异常: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isTestingHttp = false);
+    }
+  }
+
+  Future<void> _testWs() async {
+    final wsUrl = _wsCtrl.text.trim();
+    if (wsUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先输入实时流 WS 端点地址')),
+      );
+      return;
+    }
+
+    setState(() => _isTestingWs = true);
+    final stopwatch = Stopwatch()..start();
+
+    try {
+      final uri = Uri.parse(wsUrl);
+      final channel = WebSocketChannel.connect(uri);
+      await channel.ready.timeout(const Duration(seconds: 6));
+      final ms = stopwatch.elapsedMilliseconds;
+      await channel.sink.close();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('连接成功：实时流 WebSocket 已建立双向握手 (耗时 ${ms}ms)'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      String errMsg = e.toString();
+      if (errMsg.contains('TimeoutException')) {
+        errMsg = 'WebSocket 握手超时 (6s)，请检查端口是否开放及地址';
+      } else if (errMsg.contains('Connection refused') || errMsg.contains('Failed host lookup')) {
+        errMsg = '无法连接到 WebSocket 服务器 (拒绝连接或域名无法解析)';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('实时流连接失败：$errMsg'),
+          backgroundColor: Colors.redAccent,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isTestingWs = false);
+    }
   }
 
   @override
@@ -194,13 +371,15 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.refresh, size: 16),
-                        label: const Text('测试'),
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('接口响应正常 (HTTP 200 OK)')),
-                          );
-                        },
+                        icon: _isTestingHttp
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh, size: 16),
+                        label: Text(_isTestingHttp ? '测试中' : '测试'),
+                        onPressed: _isTestingHttp ? null : _testHttp,
                       ),
                     ],
                   ),
@@ -241,26 +420,17 @@ class _AsrSettingsScreenState extends State<AsrSettingsScreen> {
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.refresh, size: 16),
-                        label: const Text('测试'),
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('实时流服务连接测试完成')),
-                          );
-                        },
+                        icon: _isTestingWs
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh, size: 16),
+                        label: Text(_isTestingWs ? '测试中' : '测试'),
+                        onPressed: _isTestingWs ? null : _testWs,
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _ctxCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: '上下文长度',
-                      hintText: '30000',
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
                   ),
                 ],
               ),

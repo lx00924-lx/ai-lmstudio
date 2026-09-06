@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 /// 单个 API 模型端点配置（卡片项）
@@ -69,6 +71,21 @@ class AppSettings {
   String aiName;
   String aiAvatar; // Base64 或本地图片路径
   String accountPassword;
+  String clientSessionId;
+
+  /// 动态识别当前 Flutter 运行的设备分类：手机端 (mobile) / 电脑端 (desktop)
+  static String get currentDeviceType {
+    if (kIsWeb) return 'desktop';
+    try {
+      if (Platform.isAndroid || Platform.isIOS) {
+        return 'mobile';
+      }
+      if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+        return 'desktop';
+      }
+    } catch (_) {}
+    return 'desktop';
+  }
 
   // --- 2. 个性化设置 ---
   String customBackground; // 背景图片路径或 Base64
@@ -123,6 +140,7 @@ class AppSettings {
     this.aiName = 'Aether-X',
     this.aiAvatar = '',
     this.accountPassword = '',
+    this.clientSessionId = '',
     // 个性化
     this.customBackground = '',
     this.backgroundOpacity = 100,
@@ -193,6 +211,7 @@ class AppSettings {
       'aiName': aiName,
       'aiAvatar': aiAvatar,
       'accountPassword': accountPassword,
+      'clientSessionId': clientSessionId,
       'customBackground': customBackground,
       'backgroundOpacity': backgroundOpacity,
       'showBackgroundInDarkMode': showBackgroundInDarkMode,
@@ -265,6 +284,7 @@ class AppSettings {
       aiName: map['aiName']?.toString() ?? 'Aether-X',
       aiAvatar: map['aiAvatar']?.toString() ?? '',
       accountPassword: map['accountPassword']?.toString() ?? '',
+      clientSessionId: map['clientSessionId']?.toString() ?? '',
       customBackground: map['customBackground']?.toString() ?? '',
       backgroundOpacity: (map['backgroundOpacity'] as num?)?.toInt() ?? 100,
       showBackgroundInDarkMode: map['showBackgroundInDarkMode'] as bool? ?? true,

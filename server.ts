@@ -13,7 +13,15 @@ const PORT = 3000;
 const MESSAGES_FILE = path.join(process.cwd(), "messages_data", "messages_v2.json"); // Use v2 to avoid conflicts
 const USERS_FILE = path.join(process.cwd(), "messages_data", "users.json");
 const SETTINGS_FILE = path.join(process.cwd(), "messages_data", "settings.json");
+const ACTIVE_SESSIONS_FILE = path.join(process.cwd(), "messages_data", "active_sessions.json");
 const UPLOADS_DIR = path.join(process.cwd(), "messages_media");
+
+interface DeviceSession {
+  clientSessionId: string;
+  deviceType: 'mobile' | 'desktop';
+  loginTime: number;
+  lastActive: number;
+}
 
 // File lock mechanism to prevent race conditions during concurrent JSON writes
 const fileLocks: Map<string, Promise<any>> = new Map();
@@ -268,13 +276,17 @@ async function runServerSideGeneration({
     let agentExecutionResult: { status: 'completed' | 'failed'; steps: string[]; rawOutput?: string; timestamp?: string } | null = null;
 
     let accumulatedContent = "";
-    const onChunk = (chunk: string) => {
-      accumulatedContent += chunk;
+    let accumulatedReasoning = "";
+    const onChunk = (chunk: string, reasoningChunk?: string) => {
+      if (chunk) accumulatedContent += chunk;
+      if (reasoningChunk) accumulatedReasoning += reasoningChunk;
       genState.content = accumulatedContent;
       io.to(`user_${userId}`).emit("chat_chunk", {
         messageId: assistantMessageId,
         chunk,
+        reasoningChunk: reasoningChunk || "",
         fullContent: accumulatedContent,
+        fullReasoning: accumulatedReasoning,
       });
     };
 
@@ -530,9 +542,10 @@ async function runServerSideGeneration({
             if (dataStr === "[DONE]") continue;
             try {
               const json = JSON.parse(dataStr);
-              const delta = json.choices?.[0]?.delta?.content || json.choices?.[0]?.text || "";
-              if (delta) {
-                onChunk(delta);
+              const deltaContent = json.choices?.[0]?.delta?.content || json.choices?.[0]?.text || "";
+              const deltaReasoning = json.choices?.[0]?.delta?.reasoning_content || json.choices?.[0]?.delta?.reasoning || "";
+              if (deltaContent || deltaReasoning) {
+                onChunk(deltaContent, deltaReasoning);
               }
             } catch (_) {}
           }
@@ -625,6 +638,8 @@ async function runServerSideGeneration({
       id: assistantMessageId,
       role: 'assistant',
       content: accumulatedContent,
+      reasoningContent: accumulatedReasoning,
+      thought: accumulatedReasoning,
       timestamp: new Date().toISOString(),
       type: 'text',
       status: 'completed',
@@ -636,6 +651,7 @@ async function runServerSideGeneration({
     io.to(`user_${userId}`).emit("chat_completed", {
       messageId: assistantMessageId,
       content: accumulatedContent,
+      reasoningContent: accumulatedReasoning,
       isAgentMode: isAgentMode || false,
       agentExecution: agentExecutionResult
     });
@@ -752,8 +768,8 @@ async function startServer() {
     if (!req.body || typeof req.body !== 'object') {
       return res.status(400).json({ error: "Invalid request body" });
     }
-    const { username, password } = req.body;
-    console.log(`Login attempt for username: ${username}`);
+    const { username, password, deviceType, clientSessionId } = req.body;
+    console.log(`Login attempt for username: ${username}, deviceType: ${deviceType}, clientSessionId: ${clientSessionId}`);
     try {
       const users = await safeReadJSON<any[]>(USERS_FILE, []);
       const user = users.find((u: any) => u.username === username);
@@ -768,12 +784,106 @@ async function startServer() {
         return res.status(401).json({ error: "密码错误" });
       }
 
-      console.log(`Login successful for username: ${username}`);
-      res.json({ user: { id: user.id, username: user.username } });
+      const cleanDeviceType: 'mobile' | 'desktop' = (deviceType === 'mobile') ? 'mobile' : 'desktop';
+      const sessionId = (clientSessionId || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`).toString();
+
+      await withFileLock(ACTIVE_SESSIONS_FILE, async () => {
+        const sessions = await safeReadJSON<Record<string, Record<string, DeviceSession>>>(ACTIVE_SESSIONS_FILE, {});
+        if (!sessions[username]) sessions[username] = {};
+
+        const existingSession = sessions[username][cleanDeviceType];
+        if (existingSession && existingSession.clientSessionId && existingSession.clientSessionId !== sessionId) {
+          const reason = `您的账号已在另一台${cleanDeviceType === 'mobile' ? '手机' : '电脑'}上登录，当前设备已被下线。`;
+          console.log(`[Kick] User ${username} logged in on new ${cleanDeviceType}, kicking previous session ${existingSession.clientSessionId}`);
+          
+          io.to(`session_${existingSession.clientSessionId}`).emit("force_logout", {
+            reason,
+            deviceType: cleanDeviceType,
+            kickedSessionId: existingSession.clientSessionId,
+          });
+          io.to(`user_${username}_${cleanDeviceType}`).emit("force_logout", {
+            reason,
+            deviceType: cleanDeviceType,
+            kickedSessionId: existingSession.clientSessionId,
+          });
+          io.to(`user_${username}`).emit("force_logout", {
+            reason,
+            deviceType: cleanDeviceType,
+            kickedSessionId: existingSession.clientSessionId,
+          });
+        }
+
+        sessions[username][cleanDeviceType] = {
+          clientSessionId: sessionId,
+          deviceType: cleanDeviceType,
+          loginTime: Date.now(),
+          lastActive: Date.now(),
+        };
+        await safeWriteJSON(ACTIVE_SESSIONS_FILE, sessions);
+      });
+
+      console.log(`Login successful for username: ${username} on ${cleanDeviceType}`);
+      res.json({
+        user: { id: user.id, username: user.username },
+        deviceType: cleanDeviceType,
+        clientSessionId: sessionId,
+      });
     } catch (e) {
       console.error(`Login error for ${username}:`, e);
       res.status(500).json({ error: "Login failed" });
     }
+  });
+
+  app.get("/api/check-session", async (req, res) => {
+    const userId = (req.query.userId || req.query.username || "").toString().trim();
+    const deviceType: 'mobile' | 'desktop' = (req.query.deviceType || "").toString() === "mobile" ? "mobile" : "desktop";
+    const clientSessionId = (req.query.clientSessionId || "").toString().trim();
+
+    if (!userId || !clientSessionId || userId === 'guest' || userId === 'default_user') {
+      return res.json({ valid: true });
+    }
+
+    try {
+      const sessions = await safeReadJSON<Record<string, Record<string, DeviceSession>>>(ACTIVE_SESSIONS_FILE, {});
+      const active = sessions[userId]?.[deviceType];
+
+      if (active && active.clientSessionId && active.clientSessionId !== clientSessionId) {
+        return res.status(401).json({
+          valid: false,
+          error: "FORCE_LOGOUT",
+          reason: `您的账号已在另一台${deviceType === 'mobile' ? '手机' : '电脑'}上登录，当前设备已被下线。`,
+          kickedSessionId: clientSessionId,
+        });
+      }
+
+      if (active && active.clientSessionId === clientSessionId) {
+        active.lastActive = Date.now();
+      }
+      res.json({ valid: true });
+    } catch (e) {
+      res.json({ valid: true });
+    }
+  });
+
+  app.post("/api/logout", async (req, res) => {
+    const { username, userId, deviceType, clientSessionId } = req.body || {};
+    const targetUser = (username || userId || "").toString().trim();
+    const cleanDeviceType = deviceType === "mobile" ? "mobile" : "desktop";
+
+    if (targetUser) {
+      try {
+        await withFileLock(ACTIVE_SESSIONS_FILE, async () => {
+          const sessions = await safeReadJSON<Record<string, Record<string, DeviceSession>>>(ACTIVE_SESSIONS_FILE, {});
+          if (sessions[targetUser]?.[cleanDeviceType]?.clientSessionId === clientSessionId) {
+            delete sessions[targetUser][cleanDeviceType];
+            await safeWriteJSON(ACTIVE_SESSIONS_FILE, sessions);
+          }
+        });
+      } catch (e) {
+        console.error("Logout error:", e);
+      }
+    }
+    res.json({ success: true });
   });
 
   // REST API for messages (Per user)
@@ -2015,9 +2125,25 @@ if %errorlevel% neq 0 (
     console.log("Client connected:", socket.id);
 
     // Join a room based on userId to keep data separate
-    socket.on("join_user_room", (userId) => {
+    socket.on("join_user_room", (payload) => {
+      let userId = "";
+      let deviceType: 'mobile' | 'desktop' = "desktop";
+      let clientSessionId = "";
+
+      if (typeof payload === "object" && payload !== null) {
+        userId = payload.userId || "";
+        deviceType = payload.deviceType === "mobile" ? "mobile" : "desktop";
+        clientSessionId = payload.clientSessionId || "";
+      } else {
+        userId = String(payload || "");
+      }
+
       socket.join(`user_${userId}`);
-      console.log(`Socket ${socket.id} joined user_${userId} room`);
+      socket.join(`user_${userId}_${deviceType}`);
+      if (clientSessionId) {
+        socket.join(`session_${clientSessionId}`);
+      }
+      console.log(`Socket ${socket.id} joined user_${userId}, user_${userId}_${deviceType}${clientSessionId ? ', session_' + clientSessionId : ''}`);
     });
 
     socket.on("send_message", async ({ userId, message }) => {

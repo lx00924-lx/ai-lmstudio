@@ -8,6 +8,7 @@ import '../utils/image_picker_helper.dart';
 import '../widgets/chat_input_bar.dart';
 import '../widgets/message_bubble.dart';
 import 'log_console_screen.dart';
+import 'session_management_screen.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatelessWidget {
@@ -169,10 +170,6 @@ class ChatScreen extends StatelessWidget {
                         session.model,
                         style: const TextStyle(fontSize: 11),
                       ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline, size: 18),
-                        onPressed: () => chat.deleteSession(session.id),
-                      ),
                       onTap: () {
                         chat.selectSession(session);
                         Navigator.pop(context);
@@ -180,6 +177,19 @@ class ChatScreen extends StatelessWidget {
                     );
                   },
                 ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.tune_outlined, size: 20),
+                title: const Text('会话管理与备份', style: TextStyle(fontSize: 13)),
+                trailing: const Icon(Icons.chevron_right, size: 18),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SessionManagementScreen()),
+                  );
+                },
               ),
             ],
           ),
