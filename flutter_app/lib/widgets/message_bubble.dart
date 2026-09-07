@@ -344,7 +344,11 @@ class MessageBubble extends StatelessWidget {
                       width: 36,
                       height: 36,
                       decoration: const BoxDecoration(
-                        color: Color(0xFF0284C7),
+                        gradient: LinearGradient(
+                          colors: [Color(0xFF0284C7), Color(0xFF0EA5E9)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(Icons.person, color: Colors.white, size: 20),

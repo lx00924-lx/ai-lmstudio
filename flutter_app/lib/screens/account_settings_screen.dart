@@ -9,6 +9,7 @@ import '../services/storage_service.dart';
 import '../utils/image_picker_helper.dart';
 import 'chat_search_screen.dart';
 import 'login_screen.dart';
+import 'session_management_screen.dart';
 
 class AccountSettingsScreen extends StatefulWidget {
   const AccountSettingsScreen({super.key});
@@ -296,12 +297,24 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                     children: [
                       CircleAvatar(
                         radius: 22,
-                        backgroundColor: const Color(0xFF0284C7).withOpacity(0.15),
+                        backgroundColor: Colors.transparent,
                         backgroundImage: ImagePickerHelper.decodeBase64Image(s.userAvatar) != null
                             ? MemoryImage(ImagePickerHelper.decodeBase64Image(s.userAvatar)!)
                             : null,
                         child: ImagePickerHelper.decodeBase64Image(s.userAvatar) == null
-                            ? const Icon(Icons.person, color: Color(0xFF0284C7))
+                            ? Container(
+                                width: 44,
+                                height: 44,
+                                decoration: const BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [Color(0xFF0284C7), Color(0xFF0EA5E9)],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.person, color: Colors.white, size: 24),
+                              )
                             : null,
                       ),
                       const SizedBox(width: 12),
@@ -389,7 +402,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           ),
           const SizedBox(height: 16),
 
-          // 聊天记录搜索与导入导出管理
+          // 会话与聊天记录管理
           Card(
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             child: Padding(
@@ -397,8 +410,29 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('聊天记录管理与备份', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('会话与数据管理', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0284C7).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.forum_outlined, color: Color(0xFF0284C7)),
+                    ),
+                    title: const Text('会话管理', style: TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: const Text('卡片流管理、单选/多选批量删除、防误删及备份整合'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const SessionManagementScreen()),
+                      );
+                    },
+                  ),
+                  const Divider(),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Container(

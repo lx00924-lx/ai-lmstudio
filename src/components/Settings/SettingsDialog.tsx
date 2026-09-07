@@ -16,10 +16,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AppSettings } from '../../types';
 import { API_BASE_URL } from '../../config';
-import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2, HardDrive, FolderOpen, RotateCcw, RefreshCw, Check, Type, Bot, Download, Key, Cpu, Dices, CheckCircle2, AlertTriangle, QrCode, Smartphone, FolderKanban, Plus, MessageSquare, Link } from 'lucide-react';
+import { ImagePlus, X, Camera, Image as ImageIcon, ChevronDown, Loader2, Bug, Terminal, Copy, Trash2, HardDrive, FolderOpen, RotateCcw, RefreshCw, Check, Type, Bot, Download, Key, Cpu, Dices, CheckCircle2, AlertTriangle, QrCode, Smartphone, FolderKanban, Plus, MessageSquare, Link, Sliders } from 'lucide-react';
 import QRCode from 'qrcode';
 import socket from '../../lib/socket';
 import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Toast } from '@capacitor/toast';
 import { CapacitorHttp } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
@@ -3017,14 +3018,120 @@ if %errorlevel% neq 0 (
                           : '自动模式：未指定或会话不存在时，将自动在目标工作区创建新会话并自动绑定。'}
                       </span>
                       {localSettings.agentSessionId && (
-                        <button
-                          type="button"
-                          onClick={() => updateAndSave({ agentSessionId: '' })}
-                          className="text-primary hover:underline ml-2 shrink-0 font-medium"
-                        >
-                          重置为自动
-                        </button>
+                        <div className="flex items-center gap-2 ml-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const newTitle = window.prompt('请输入新的会话标题：');
+                              if (newTitle && newTitle.trim()) {
+                                try {
+                                  await fetch(`${API_BASE_URL}/api/agent/rename-session`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      sessionId: localSettings.agentSessionId,
+                                      title: newTitle.trim(),
+                                      token: localSettings.agentToken
+                                    })
+                                  });
+                                  fetchAgentSessions();
+                                  Toast.show({ text: '会话已重命名' });
+                                } catch (e) {
+                                  console.error(e);
+                                }
+                              }
+                            }}
+                            className="text-primary hover:underline font-medium text-[10px]"
+                          >
+                            重命名
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (window.confirm('确认归档此会话？归档后将从本地工作区移除。')) {
+                                try {
+                                  await fetch(`${API_BASE_URL}/api/agent/archive-session`, {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                      sessionId: localSettings.agentSessionId,
+                                      token: localSettings.agentToken
+                                    })
+                                  });
+                                  updateAndSave({ agentSessionId: '' });
+                                  fetchAgentSessions();
+                                  Toast.show({ text: '会话已归档' });
+                                } catch (e) {
+                                  console.error(e);
+                                }
+                              }
+                            }}
+                            className="text-destructive hover:underline font-medium text-[10px]"
+                          >
+                            归档会话
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateAndSave({ agentSessionId: '' })}
+                            className="text-muted-foreground hover:underline font-medium text-[10px]"
+                          >
+                            重置为自动
+                          </button>
+                        </div>
                       )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* DSH 3080 运行控制参数 (模型/推理/权限) */}
+                <div className="pt-2 border-t border-primary/10 space-y-2.5">
+                  <div className="text-[11px] font-semibold text-foreground/90 flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5 text-primary" />
+                    DSH 智能体执行选项
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    {/* 模型选择 */}
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground font-medium">默认模型 (Model)</Label>
+                      <select
+                        value={localSettings.agentModel || 'deepseek-v4-flash'}
+                        onChange={(e) => updateAndSave({ agentModel: e.target.value })}
+                        className="w-full h-7 text-xs bg-background border border-input rounded px-1.5 text-foreground font-mono"
+                      >
+                        <option value="deepseek-v4-flash">deepseek-v4-flash (DeepSeek-V4-Flash)</option>
+                        <option value="deepseek-v4-pro">deepseek-v4-pro (DeepSeek-V4-Pro)</option>
+                        <option value="deepseek-v4-flash-vision-exp">deepseek-v4-flash-vision-exp (视觉实验版)</option>
+                        <option value="ep-20260824185630-nkdc7">ep-20260824185630-nkdc7 (Doubao 豆包)</option>
+                      </select>
+                    </div>
+
+                    {/* 推理深度 */}
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground font-medium">思考深度 (Reasoning)</Label>
+                      <select
+                        value={localSettings.agentReasoningEffort || 'high'}
+                        onChange={(e) => updateAndSave({ agentReasoningEffort: e.target.value as any })}
+                        className="w-full h-7 text-xs bg-background border border-input rounded px-1.5 text-foreground"
+                      >
+                        <option value="high">深度思考 (High)</option>
+                        <option value="max">极限思考 (Max)</option>
+                        <option value="low">快速推理 (Low)</option>
+                        <option value="off">关闭思考 (Off)</option>
+                      </select>
+                    </div>
+
+                    {/* 权限级别 */}
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground font-medium">运行权限 (Permission)</Label>
+                      <select
+                        value={localSettings.agentPermission || 'workspace-write'}
+                        onChange={(e) => updateAndSave({ agentPermission: e.target.value as any })}
+                        className="w-full h-7 text-xs bg-background border border-input rounded px-1.5 text-foreground"
+                      >
+                        <option value="workspace-write">工作区写 (Workspace Write)</option>
+                        <option value="read-only">只读模式 (Read Only)</option>
+                        <option value="danger-full-access">完全控制 (Danger Full Access)</option>
+                      </select>
                     </div>
                   </div>
                 </div>

@@ -661,16 +661,49 @@ export default function App() {
       });
     };
 
+    const handleAgentWaitingApproval = (data: { taskId: string; messageId?: string; approval: any }) => {
+      setState(prev => {
+        const msgs = Array.isArray(prev.messages) ? prev.messages : [];
+        return {
+          ...prev,
+          messages: msgs.map(msg => {
+            const isTarget = (data.messageId && msg.id === data.messageId) ||
+                             (msg.agentExecution?.taskId === data.taskId) ||
+                             (msg.agentExecution?.status === 'running');
+            if (isTarget) {
+              return {
+                ...msg,
+                agentExecution: {
+                  ...(msg.agentExecution || { taskId: data.taskId, steps: [] }),
+                  status: 'waiting_approval' as const,
+                  waitingApproval: {
+                    approvalId: data.approval?.approvalId || data.approval?.id || `appr_${Date.now()}`,
+                    actionType: data.approval?.actionType || data.approval?.type || 'sensitive_action',
+                    description: data.approval?.description || data.approval?.prompt || '本地智能体请求执行敏感操作，需要您的确认',
+                    details: data.approval?.details || data.approval,
+                    timestamp: Date.now()
+                  }
+                }
+              };
+            }
+            return msg;
+          })
+        };
+      });
+    };
+
     socket.on("agent_status_change", handleAgentStatusChange);
     socket.on("agent_task_started", handleAgentTaskStarted);
     socket.on("agent_task_step", handleAgentTaskStep);
     socket.on("agent_task_finished", handleAgentTaskFinished);
+    socket.on("agent_waiting_approval", handleAgentWaitingApproval);
 
     return () => {
       socket.off("agent_status_change", handleAgentStatusChange);
       socket.off("agent_task_started", handleAgentTaskStarted);
       socket.off("agent_task_step", handleAgentTaskStep);
       socket.off("agent_task_finished", handleAgentTaskFinished);
+      socket.off("agent_waiting_approval", handleAgentWaitingApproval);
     };
   }, [state.settings.agentToken]);
 
@@ -2000,6 +2033,17 @@ function compareSemVer(v1: string, v2: string): number {
                     onStartCall={() => setIsCallOpen(true)}
                     isAgentMode={state.settings.agentMode || false}
                     agentOnline={agentOnline}
+                    agentModel={state.settings.agentModel || 'deepseek-v4-flash'}
+                    agentReasoningEffort={state.settings.agentReasoningEffort || 'high'}
+                    agentPermission={state.settings.agentPermission || 'workspace-write'}
+                    agentToken={state.settings.agentToken}
+                    agentSessionId={state.settings.agentSessionId}
+                    onUpdateAgentConfig={(config) => {
+                      handleSaveSettings({
+                        ...state.settings,
+                        ...config
+                      });
+                    }}
                     onToggleAgentMode={() => {
                       const newMode = !state.settings.agentMode;
                       handleSaveSettings({

@@ -329,7 +329,7 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
         children: [
           // 顶部检索与数据备份操作工具条
           Padding(
-            padding: const EdgeInsets.fromARGB(255, 16, 16, 8, 16),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Column(
               children: [
                 // 搜索框

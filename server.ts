@@ -202,6 +202,7 @@ interface ConnectedAgent {
   queuedTasks?: any[];
   workspaces?: string[];
   sessions?: DshSessionInfo[];
+  models?: any[];
   activeUserSessions?: Map<string, string>;
 }
 
@@ -347,8 +348,8 @@ async function runServerSideGeneration({
         const taskPromise = new Promise<{ success: boolean; output: string; steps: string[] }>((resolve, reject) => {
           const timeoutId = setTimeout(() => {
             pendingAgentTasks.delete(taskId);
-            reject(new Error("本地 DeepSeek 智能体执行超时 (180秒)"));
-          }, 180000);
+            reject(new Error("本地 DeepSeek 智能体执行超时 (300秒)"));
+          }, 300000);
 
           pendingAgentTasks.set(taskId, {
             resolve,
@@ -383,8 +384,11 @@ async function runServerSideGeneration({
           agentWorkspace: selectedWorkspace,
           prompt: rawUserPrompt,
           messages: workingMessages.slice(-5),
-          harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3081",
-          model: settings?.modelName || "deepseek-chat",
+          harnessUrl: settings?.agentHarnessUrl || "http://127.0.0.1:3080",
+          model: settings?.agentModel || "deepseek-v4-flash",
+          reasoningEffort: settings?.agentReasoningEffort || "high",
+          reasoning_effort: settings?.agentReasoningEffort || "high",
+          permission: settings?.agentPermission || "workspace-write",
           apiEndpoint: settings?.apiEndpoint || "",
           apiKey: settings?.apiKey || "",
           chatModel: settings?.modelName || ""
@@ -1692,18 +1696,144 @@ if %errorlevel% neq 0 (
   // Sync sessions report from agent
   app.post("/api/agent/sync-sessions", (req, res) => {
     try {
-      const { token, workspaces, sessions } = req.body;
+      const { token, workspaces, sessions, models } = req.body;
       const targetToken = (token || "").trim() || "default_agent_token";
       const agent = connectedAgents.get(targetToken);
       if (agent) {
         if (workspaces) agent.workspaces = workspaces;
         if (sessions) agent.sessions = sessions;
+        if (models) agent.models = models;
         agent.lastPing = Date.now();
         io.emit("agent_sessions_updated", {
           token: targetToken,
           workspaces: agent.workspaces || ["deepseek-agent"],
-          sessions: agent.sessions || []
+          sessions: agent.sessions || [],
+          models: agent.models || []
         });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get agent models and reasoning levels
+  app.get("/api/agent/models", (req, res) => {
+    try {
+      const token = (req.query.token as string || "").trim() || "default_agent_token";
+      const agent = connectedAgents.get(token);
+      if (agent && agent.models && agent.models.length > 0) {
+        return res.json({ models: agent.models });
+      }
+      // Return fallback models if not populated yet
+      res.json({
+        models: [
+          { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash", reasoningEfforts: ["off", "low", "high", "max"], defaultEffort: "high" },
+          { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", reasoningEfforts: ["off", "low", "high", "max"], defaultEffort: "high" },
+          { id: "deepseek-v4-flash-vision-exp", name: "视觉实验版 (Flash Vision)", reasoningEfforts: ["off", "low", "high", "max"], defaultEffort: "high" },
+          { id: "ep-20260824185630-nkdc7", name: "Doubao (豆包)", reasoningEfforts: [] }
+        ]
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Agent waiting approval notification from polling bridge
+  app.post("/api/agent/waiting-approval", (req, res) => {
+    try {
+      const { taskId, token, approval } = req.body;
+      const pending = pendingAgentTasks.get(taskId);
+      if (pending) {
+        io.to(`user_${pending.userId}`).emit("agent_waiting_approval", {
+          taskId,
+          messageId: pending.assistantMessageId,
+          approval
+        });
+      } else {
+        io.emit("agent_waiting_approval", { taskId, approval });
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // User decision for approval (allow / deny)
+  app.post("/api/agent/approve", (req, res) => {
+    try {
+      const { taskId, approvalId, action, token } = req.body;
+      const pending = pendingAgentTasks.get(taskId);
+      const targetToken = (token || pending?.token || "default_agent_token").trim();
+      const agent = connectedAgents.get(targetToken);
+      if (!agent) {
+        return res.status(404).json({ error: "Agent not connected or offline" });
+      }
+
+      const approvePayload = {
+        type: "agent_approve",
+        taskId,
+        approvalId,
+        action: action || "allow"
+      };
+
+      if (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) {
+        agent.ws.send(JSON.stringify(approvePayload));
+      } else if (agent.pendingPollResolvers && agent.pendingPollResolvers.length > 0) {
+        const resolver = agent.pendingPollResolvers.shift();
+        if (resolver) resolver(approvePayload);
+      } else {
+        if (!agent.queuedTasks) agent.queuedTasks = [];
+        agent.queuedTasks.push(approvePayload);
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Session rename
+  app.patch("/api/agent/rename-session", (req, res) => {
+    try {
+      const { sessionId, title, token } = req.body;
+      const targetToken = (token || "").trim() || "default_agent_token";
+      const agent = connectedAgents.get(targetToken);
+      if (agent) {
+        const renamePayload = { type: "rename_session", sessionId, title };
+        if (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) {
+          agent.ws.send(JSON.stringify(renamePayload));
+        } else if (agent.pendingPollResolvers && agent.pendingPollResolvers.length > 0) {
+          const resolver = agent.pendingPollResolvers.shift();
+          if (resolver) resolver(renamePayload);
+        } else {
+          if (!agent.queuedTasks) agent.queuedTasks = [];
+          agent.queuedTasks.push(renamePayload);
+        }
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Session archive
+  app.delete("/api/agent/archive-session", (req, res) => {
+    try {
+      const { sessionId, token } = req.body;
+      const targetToken = (token || "").trim() || "default_agent_token";
+      const agent = connectedAgents.get(targetToken);
+      if (agent) {
+        const archPayload = { type: "archive_session", sessionId };
+        if (agent.ws && agent.ws.readyState === WSWebSocket.OPEN) {
+          agent.ws.send(JSON.stringify(archPayload));
+        } else if (agent.pendingPollResolvers && agent.pendingPollResolvers.length > 0) {
+          const resolver = agent.pendingPollResolvers.shift();
+          if (resolver) resolver(archPayload);
+        } else {
+          if (!agent.queuedTasks) agent.queuedTasks = [];
+          agent.queuedTasks.push(archPayload);
+        }
       }
       res.json({ success: true });
     } catch (err: any) {
@@ -1941,14 +2071,31 @@ if %errorlevel% neq 0 (
                 steps: msg.steps || [],
               });
             }
+          } else if (msg.type === "waiting_approval") {
+            console.log(`[Agent Hub] Agent waiting approval for task ${msg.taskId}`);
+            const pending = pendingAgentTasks.get(msg.taskId);
+            if (pending) {
+              io.to(`user_${pending.userId}`).emit("agent_waiting_approval", {
+                taskId: msg.taskId,
+                messageId: pending.assistantMessageId,
+                approval: msg.approval
+              });
+            } else {
+              io.emit("agent_waiting_approval", {
+                taskId: msg.taskId,
+                approval: msg.approval
+              });
+            }
           } else if (msg.type === "sync_sessions" || msg.type === "sessions_result") {
             agentInfo.workspaces = msg.workspaces || ["deepseek-agent"];
             agentInfo.sessions = msg.sessions || [];
-            console.log(`[Agent Hub] Synced ${agentInfo.sessions.length} sessions for agent [${token}]`);
+            if (msg.models) agentInfo.models = msg.models;
+            console.log(`[Agent Hub] Synced ${agentInfo.sessions.length} sessions and ${agentInfo.models?.length || 0} models for agent [${token}]`);
             io.emit("agent_sessions_updated", {
               token,
               workspaces: agentInfo.workspaces,
-              sessions: agentInfo.sessions
+              sessions: agentInfo.sessions,
+              models: agentInfo.models || []
             });
           } else if (msg.type === "pong" || msg.type === "app_pong") {
             agentInfo.lastPing = Date.now();

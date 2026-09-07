@@ -6,7 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus, Phone, Bot, Sparkles, AlertCircle, QrCode } from 'lucide-react';
+import { Send, Mic, Camera, X, Square, Image as ImageIcon, Quote, Plus, Phone, Bot, Sparkles, AlertCircle, QrCode, Brain, Shield, ChevronDown, Check, Settings2 } from 'lucide-react';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn, formatMessageDate } from '../../lib/utils';
@@ -27,6 +27,16 @@ interface ChatInputProps {
   agentOnline?: boolean;
   onOpenAgentSettings?: () => void;
   onScanToken?: (token: string) => void;
+  agentModel?: string;
+  agentReasoningEffort?: 'off' | 'low' | 'high' | 'max';
+  agentPermission?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  agentToken?: string;
+  agentSessionId?: string;
+  onUpdateAgentConfig?: (config: {
+    agentModel?: string;
+    agentReasoningEffort?: 'off' | 'low' | 'high' | 'max';
+    agentPermission?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  }) => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({ 
@@ -38,7 +48,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onToggleAgentMode,
   agentOnline = false,
   onOpenAgentSettings,
-  onScanToken
+  onScanToken,
+  agentModel = 'deepseek-v4-flash',
+  agentReasoningEffort = 'high',
+  agentPermission = 'workspace-write',
+  agentToken = '',
+  agentSessionId,
+  onUpdateAgentConfig
 }) => {
   const [text, setText] = useState('');
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -54,6 +70,44 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const { isRecording, audioUrl, duration, maxDuration, startRecording, stopRecording, setAudioUrl } = useVoiceRecorder();
   const micLongPressTimer = useRef<NodeJS.Timeout | null>(null);
   const isMicLongPress = useRef(false);
+
+  // Agent model list & control state
+  const [dshModels, setDshModels] = useState<Array<{ id: string; name: string; reasoningEfforts?: string[]; reasoning_effort?: string[]; defaultEffort?: string; default_reasoning?: string }>>([
+    { id: "deepseek-v4-flash", name: "DeepSeek-V4-Flash", reasoningEfforts: ["off", "low", "high", "max"], defaultEffort: "high" },
+    { id: "deepseek-v4-pro", name: "DeepSeek-V4-Pro", reasoningEfforts: ["off", "low", "high", "max"], defaultEffort: "high" },
+    { id: "deepseek-v4-flash-vision-exp", name: "视觉实验版 (Flash Vision)", reasoningEfforts: ["off", "low", "high", "max"], defaultEffort: "high" },
+    { id: "ep-20260824185630-nkdc7", name: "Doubao (豆包)", reasoningEfforts: [] }
+  ]);
+  const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isAgentMode) {
+      fetch(`${API_BASE_URL}/api/agent/models?token=${encodeURIComponent(agentToken)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && Array.isArray(data.models) && data.models.length > 0) {
+            setDshModels(data.models);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isAgentMode, agentToken]);
+
+  // Click outside to close model selector
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(e.target as Node)) {
+        setIsModelSelectorOpen(false);
+      }
+    };
+    if (isModelSelectorOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isModelSelectorOpen]);
 
   // Auto-focus when isRecording becomes false
   useEffect(() => {
@@ -373,6 +427,168 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Agent Mode Controls Strip (Model, Reasoning Effort, Permission) */}
+        {isAgentMode && (
+          <div className="flex items-center justify-between gap-1.5 mb-1.5 px-1 overflow-x-auto no-scrollbar select-none text-[11px]">
+            <div className="flex items-center gap-1.5 shrink-0 relative" ref={modelMenuRef}>
+              {/* Model Selector Button */}
+              <button
+                type="button"
+                onClick={() => setIsModelSelectorOpen(!isModelSelectorOpen)}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted/70 hover:bg-muted text-foreground/80 hover:text-foreground border border-border/60 transition-colors cursor-pointer"
+                title="选择 DSH 本地模型"
+              >
+                <Bot size={11} className="text-primary shrink-0" />
+                <span className="font-mono text-[10.5px] max-w-[110px] truncate">{agentModel}</span>
+                <ChevronDown size={10} className={cn("text-muted-foreground transition-transform", isModelSelectorOpen && "rotate-180")} />
+              </button>
+
+              {/* Model Dropdown Menu */}
+              {isModelSelectorOpen && (
+                <div className="absolute bottom-full left-0 mb-1 z-50 min-w-[180px] bg-popover/95 backdrop-blur-md border border-border rounded-lg shadow-lg p-1 text-xs space-y-0.5">
+                  <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground border-b border-border/50">
+                    DSH 3080 可用模型
+                  </div>
+                  {dshModels.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        const newEfforts = m.reasoningEfforts || m.reasoning_effort || [];
+                        let nextEffort: 'off' | 'low' | 'high' | 'max' = agentReasoningEffort;
+                        if (newEfforts.length === 0) {
+                          nextEffort = 'off';
+                        } else if (!newEfforts.includes(agentReasoningEffort)) {
+                          nextEffort = (m.defaultEffort || m.default_reasoning || newEfforts[0] || 'high') as any;
+                        }
+                        onUpdateAgentConfig?.({
+                          agentModel: m.id,
+                          agentReasoningEffort: nextEffort
+                        });
+                        setIsModelSelectorOpen(false);
+                      }}
+                      className={cn(
+                        "w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-[11px] transition-colors hover:bg-accent hover:text-accent-foreground",
+                        agentModel === m.id && "bg-primary/10 text-primary font-medium"
+                      )}
+                    >
+                      <span className="truncate">{m.name || m.id}</span>
+                      {agentModel === m.id && <Check size={12} className="text-primary shrink-0 ml-1" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Reasoning Effort (Thinking Depth) Button - Dynamic from model metadata */}
+              {(() => {
+                const currentModelObj = dshModels.find(m => m.id === agentModel);
+                const supportedEfforts = (currentModelObj?.reasoningEfforts || currentModelObj?.reasoning_effort || ['off', 'low', 'high', 'max']) as Array<'off' | 'low' | 'high' | 'max'>;
+                const hasReasoning = supportedEfforts.length > 0;
+
+                const getEffortLabel = (effort: string) => {
+                  switch (effort) {
+                    case 'high': return '深度思考 (High)';
+                    case 'max': return '极限思考 (Max)';
+                    case 'low': return '快速推理 (Low)';
+                    case 'off': return '关闭思考 (Off)';
+                    default: return effort;
+                  }
+                };
+
+                const getShortLabel = (effort: string) => {
+                  switch (effort) {
+                    case 'high': return '深度思考';
+                    case 'max': return '极限思考';
+                    case 'low': return '快速推理';
+                    case 'off': return '关闭思考';
+                    default: return effort;
+                  }
+                };
+
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!hasReasoning) {
+                        Toast.show({ text: '当前模型为通用模型，不支持设置思考深度' });
+                        return;
+                      }
+                      // Preferred rotation: high -> max -> low -> off
+                      const defaultOrder: Array<'off' | 'low' | 'high' | 'max'> = ['high', 'max', 'low', 'off'];
+                      const activeList = defaultOrder.filter(item => supportedEfforts.includes(item));
+                      const currentIdx = activeList.indexOf(agentReasoningEffort);
+                      const nextEffort = activeList[(currentIdx + 1) % activeList.length] || 'high';
+                      onUpdateAgentConfig?.({ agentReasoningEffort: nextEffort });
+                      Toast.show({ text: `已将推理思考深度切换为: ${getEffortLabel(nextEffort)}` });
+                    }}
+                    className={cn(
+                      "flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10.5px] font-medium transition-colors cursor-pointer",
+                      !hasReasoning
+                        ? "bg-muted/40 text-muted-foreground/60 border-border/40 opacity-70 cursor-not-allowed"
+                        : agentReasoningEffort === 'high' 
+                          ? "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30" 
+                          : agentReasoningEffort === 'max'
+                            ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border-indigo-500/40 font-semibold"
+                            : agentReasoningEffort === 'low' 
+                              ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30" 
+                              : "bg-muted/70 text-muted-foreground border-border/60"
+                    )}
+                    title={hasReasoning ? "切换模型思考深度 (Reasoning Effort: high/max/low/off)" : "当前模型无思考深度选项"}
+                  >
+                    <Brain size={11} className="shrink-0" />
+                    <span>
+                      {!hasReasoning ? '无思考档位' : getShortLabel(agentReasoningEffort)}
+                    </span>
+                  </button>
+                );
+              })()}
+
+              {/* Permission Level Button (3-Tier DSH Standard: workspace-write / read-only / danger-full-access) */}
+              <button
+                type="button"
+                onClick={() => {
+                  const permCycle: Array<'workspace-write' | 'read-only' | 'danger-full-access'> = ['workspace-write', 'read-only', 'danger-full-access'];
+                  const nextPermIdx = (permCycle.indexOf(agentPermission) + 1) % permCycle.length;
+                  const nextPermVal = permCycle[nextPermIdx];
+                  onUpdateAgentConfig?.({ agentPermission: nextPermVal });
+                  Toast.show({ 
+                    text: `执行权限级别: ${
+                      nextPermVal === 'workspace-write' ? '工作区写 (Workspace Write)' : 
+                      nextPermVal === 'read-only' ? '只读安全模式 (Read Only)' : 
+                      '完全控制 (Danger Full Access)'
+                    }` 
+                  });
+                }}
+                className={cn(
+                  "flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10.5px] font-medium transition-colors cursor-pointer",
+                  agentPermission === 'danger-full-access'
+                    ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                    : agentPermission === 'workspace-write'
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+                      : "bg-muted/70 text-muted-foreground border-border/60"
+                )}
+                title="权限等级 (Permission Level: workspace-write / read-only / danger-full-access)"
+              >
+                <Shield size={11} className="shrink-0" />
+                <span>
+                  {agentPermission === 'workspace-write' ? '工作区写' : agentPermission === 'read-only' ? '只读模式' : '完全控制'}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={onOpenAgentSettings}
+                className="p-1 text-muted-foreground hover:text-foreground rounded hover:bg-muted/60 transition-colors"
+                title="打开 Agent 详细配置"
+              >
+                <Settings2 size={12} />
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 sm:gap-3 bg-white dark:bg-black border border-border rounded-[20px] sm:rounded-[24px] p-1.5 sm:p-2 h-14 sm:h-20 shadow-sm dark:shadow-none">
           {/* Agent Mode Toggle Pill */}

@@ -5,13 +5,32 @@
 
 export type MessageRole = 'user' | 'assistant';
 
+export interface AgentApprovalInfo {
+  approvalId: string;
+  actionType: string;
+  description: string;
+  details?: Record<string, any>;
+  timestamp?: number;
+}
+
+export interface DshModelInfo {
+  id: string;
+  name: string;
+  reasoningEfforts?: string[];
+  reasoning_effort?: string[];
+  defaultEffort?: string;
+  default_reasoning?: string;
+  capabilities?: string[];
+}
+
 export interface AgentExecutionInfo {
   taskId?: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'waiting_approval';
   steps: string[];
   rawOutput?: string;
   timestamp?: string;
   agentModel?: string;
+  waitingApproval?: AgentApprovalInfo;
 }
 
 export interface Message {
@@ -68,6 +87,9 @@ export interface AppSettings {
   agentSessionId?: string;
   agentWorkspace?: string;
   agentAutoCreateSession?: boolean;
+  agentModel?: string;
+  agentReasoningEffort?: 'off' | 'low' | 'high' | 'max';
+  agentPermission?: 'read-only' | 'workspace-write' | 'danger-full-access';
 }
 
 export interface ChatState {

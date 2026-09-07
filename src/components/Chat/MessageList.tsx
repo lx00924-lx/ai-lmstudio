@@ -379,6 +379,11 @@ const MessageItem: React.FC<{
                     执行中
                   </span>
                 )}
+                {message.agentExecution?.status === 'waiting_approval' && (
+                  <span className="text-[10px] text-amber-500 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded-full font-medium flex items-center gap-1 animate-pulse">
+                    ⚠️ 等待您的审批
+                  </span>
+                )}
                 {message.agentExecution?.status === 'completed' && (
                   <span className="text-[10px] text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded-full font-normal">已完成</span>
                 )}
@@ -386,7 +391,7 @@ const MessageItem: React.FC<{
                   <span className="text-[10px] text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-full font-normal">异常提示</span>
                 )}
 
-                {message.agentExecution?.status === 'running' && message.agentExecution.taskId && (
+                {(message.agentExecution?.status === 'running' || message.agentExecution?.status === 'waiting_approval') && message.agentExecution.taskId && (
                   <button
                     type="button"
                     onClick={async (e) => {
@@ -397,18 +402,83 @@ const MessageItem: React.FC<{
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ taskId: message.agentExecution!.taskId, token: settings.agentToken })
                         });
+                        Toast.show({ text: '已向本地 DSH 发起中止指令' });
                       } catch (err) {
                         console.error('Failed to cancel task:', err);
                       }
                     }}
-                    className="ml-auto text-[10px] text-destructive hover:bg-destructive/10 border border-destructive/30 px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors"
-                    title="中止当前本地智能体执行"
+                    className="ml-auto text-[10px] text-destructive hover:bg-destructive/10 border border-destructive/30 px-1.5 py-0.5 rounded flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                    title="中止当前本地智能体执行 (POST /v1/sessions/:id/abort)"
                   >
                     <Square size={8} className="fill-destructive" />
                     中止任务
                   </button>
                 )}
               </div>
+
+              {/* Waiting Approval Card */}
+              {message.agentExecution?.waitingApproval && (
+                <div className="my-2 p-3 bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/40 rounded-xl text-xs space-y-2 shadow-sm animate-in fade-in duration-200">
+                  <div className="flex items-center gap-1.5 font-semibold text-amber-600 dark:text-amber-400">
+                    <AlertCircle size={14} className="shrink-0" />
+                    <span>本地敏感操作审批请求</span>
+                  </div>
+                  <div className="text-foreground/90 text-[11px] leading-relaxed bg-background/50 p-2 rounded-lg border border-amber-500/20 font-mono">
+                    <div className="font-semibold text-amber-700 dark:text-amber-300 mb-0.5">
+                      操作: {message.agentExecution.waitingApproval.actionType}
+                    </div>
+                    <div>{message.agentExecution.waitingApproval.description}</div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await fetch(`${API_BASE_URL}/api/agent/approve`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              taskId: message.agentExecution!.taskId,
+                              approvalId: message.agentExecution!.waitingApproval!.approvalId,
+                              action: 'deny',
+                              token: settings.agentToken
+                            })
+                          });
+                          Toast.show({ text: '已拒绝该操作' });
+                        } catch (e) {
+                          console.error(e);
+                        }
+                      }}
+                      className="px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border bg-background hover:bg-muted text-foreground/80 hover:text-foreground transition-colors cursor-pointer"
+                    >
+                      拒绝操作
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await fetch(`${API_BASE_URL}/api/agent/approve`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              taskId: message.agentExecution!.taskId,
+                              approvalId: message.agentExecution!.waitingApproval!.approvalId,
+                              action: 'allow',
+                              token: settings.agentToken
+                            })
+                          });
+                          Toast.show({ text: '已批准执行' });
+                        } catch (e) {
+                          console.error(e);
+                        }
+                      }}
+                      className="px-3 py-1 text-[11px] font-medium rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors cursor-pointer"
+                    >
+                      批准执行
+                    </button>
+                  </div>
+                </div>
+              )}
               {message.agentExecution?.steps && message.agentExecution.steps.length > 0 && (
                 <details className="group/agent border border-primary/25 bg-primary/5 rounded-xl text-xs overflow-hidden my-1 shadow-sm">
                   <summary className="px-2.5 py-1.5 flex items-center justify-between cursor-pointer select-none text-[11px] font-medium text-foreground/90 hover:bg-primary/10 transition-colors">
