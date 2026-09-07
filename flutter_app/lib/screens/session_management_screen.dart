@@ -279,8 +279,9 @@ class _SessionManagementScreenState extends State<SessionManagementScreen> {
     // 过滤会话
     final filteredSessions = allSessions.where((s) {
       if (_searchKeyword.isEmpty) return true;
+      final modelStr = s.model ?? '';
       return s.title.toLowerCase().contains(_searchKeyword) ||
-          s.model.toLowerCase().contains(_searchKeyword);
+          modelStr.toLowerCase().contains(_searchKeyword);
     }).toList();
 
     return Scaffold(

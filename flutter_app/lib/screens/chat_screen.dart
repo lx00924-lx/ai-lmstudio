@@ -167,7 +167,7 @@ class ChatScreen extends StatelessWidget {
                         ),
                       ),
                       subtitle: Text(
-                        session.model,
+                        session.model ?? 'deepseek-v4-flash',
                         style: const TextStyle(fontSize: 11),
                       ),
                       onTap: () {
