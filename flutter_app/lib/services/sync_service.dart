@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import '../models/app_settings.dart';
@@ -32,7 +33,7 @@ class SyncService {
         return '${uri.scheme}://${uri.host}$portPart';
       }
     }
-    return 'https://lx00924ai.top';
+    return 'https://www.lx00924ai.top';
   }
 
   /// 统一注入设备与会话识别头
@@ -406,6 +407,154 @@ class SyncService {
     } catch (e) {
       _checkAndTriggerForceLogout(e);
       debugPrint('[SyncService] Delete session silent error: $e');
+    }
+  }
+
+  /// 检查特定 Token 的本地 Agent 在线状态
+  Future<bool> checkAgentStatus(String token) async {
+    final cleanToken = token.trim();
+    if (cleanToken.isEmpty) return false;
+    try {
+      final url = '$serverBaseUrl/api/agent/status?token=${Uri.encodeComponent(cleanToken)}';
+      final resp = await _dio.get(url);
+      if (resp.statusCode == 200 && resp.data is Map) {
+        return resp.data['online'] == true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// 获取本地 Agent 的工作区列表及活动会话列表
+  Future<Map<String, dynamic>> getAgentSessions(String token) async {
+    final cleanToken = token.trim();
+    try {
+      final url = '$serverBaseUrl/api/agent/sessions?token=${Uri.encodeComponent(cleanToken)}';
+      final resp = await _dio.get(url);
+      if (resp.statusCode == 200 && resp.data is Map) {
+        return {
+          'online': resp.data['online'] == true,
+          'workspaces': List<String>.from(resp.data['workspaces'] ?? ['deepseek-agent']),
+          'sessions': resp.data['sessions'] as List? ?? [],
+          'clientName': resp.data['clientName']?.toString() ?? 'DeepSeek-Harness-Local',
+        };
+      }
+    } catch (e) {
+      debugPrint('[SyncService] getAgentSessions error: $e');
+    }
+    return {
+      'online': false,
+      'workspaces': ['deepseek-agent'],
+      'sessions': [],
+      'clientName': 'DeepSeek-Harness-Local',
+    };
+  }
+
+  /// 经由服务器中继管道直接流式监听 Agent 执行状态与最终模型回复 (SSE 管道)
+  Stream<Map<String, dynamic>> streamServerAgentChat({
+    required String userId,
+    required String assistantMessageId,
+    required List<ChatMessage> messages,
+    required Map<String, dynamic> settings,
+    CancelToken? cancelToken,
+  }) async* {
+    final cleanUserId = userId.trim().isEmpty ? 'guest' : userId.trim();
+    final url = '$serverBaseUrl/api/chat/stream';
+
+    Response<ResponseBody> response;
+    try {
+      response = await _dio.post<ResponseBody>(
+        url,
+        data: {
+          'userId': cleanUserId,
+          'assistantMessageId': assistantMessageId,
+          'messages': messages.map((m) => m.toMap()).toList(),
+          'settings': settings,
+        },
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: {
+            'Accept': 'text/event-stream',
+          },
+        ),
+        cancelToken: cancelToken,
+      );
+    } catch (e) {
+      yield {
+        'error': '无法连接到调度服务器: $e',
+        'done': true,
+      };
+      return;
+    }
+
+    String buffer = '';
+
+    await for (final chunk in response.data!.stream) {
+      final text = utf8.decode(chunk);
+      buffer += text;
+
+      while (buffer.contains('\n\n')) {
+        final eventEnd = buffer.indexOf('\n\n');
+        final rawBlock = buffer.substring(0, eventEnd);
+        buffer = buffer.substring(eventEnd + 2);
+
+        final lines = rawBlock.split('\n');
+        String eventName = 'message';
+        String dataStr = '';
+
+        for (final line in lines) {
+          if (line.startsWith('event:')) {
+            eventName = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            dataStr = line.substring(5).trim();
+          }
+        }
+
+        if (dataStr.isNotEmpty) {
+          try {
+            final parsed = jsonDecode(dataStr);
+            if (eventName == 'chunk') {
+              yield {
+                'content': parsed['content'] ?? '',
+                'reasoning': parsed['reasoning'] ?? '',
+                'fullContent': parsed['fullContent'],
+                'fullReasoning': parsed['fullReasoning'],
+                'done': false,
+              };
+            } else if (eventName == 'step') {
+              yield {
+                'step': parsed['step'] ?? '',
+                'done': false,
+              };
+            } else if (eventName == 'agent_started') {
+              yield {
+                'agent_started': true,
+                'initialStep': parsed['initialStep'] ?? '',
+                'done': false,
+              };
+            } else if (eventName == 'agent_finished') {
+              yield {
+                'agent_finished': true,
+                'result': parsed['result'],
+                'done': false,
+              };
+            } else if (eventName == 'done') {
+              yield {
+                'content': '',
+                'reasoning': '',
+                'fullContent': parsed['fullContent'],
+                'fullReasoning': parsed['fullReasoning'],
+                'agentExecution': parsed['agentExecution'],
+                'done': true,
+              };
+            } else if (eventName == 'error') {
+              yield {
+                'error': parsed['error'] ?? '生成中断',
+                'done': true,
+              };
+            }
+          } catch (_) {}
+        }
+      }
     }
   }
 }

@@ -26,6 +26,9 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   late TextEditingController _newPwdCtrl;
   late TextEditingController _confirmPwdCtrl;
 
+  final FocusNode _userNameFocus = FocusNode();
+  final FocusNode _aiNameFocus = FocusNode();
+
   @override
   void initState() {
     super.initState();
@@ -37,22 +40,38 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     _newPwdCtrl = TextEditingController();
     _confirmPwdCtrl = TextEditingController();
 
-    // 实时保存可修改的用户名和 AI 名称
-    _userNameCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      sp.settings.userName = _userNameCtrl.text.trim();
-      sp.updateSettings(sp.settings);
+    // 失焦时自动保存，防止输入卡顿
+    _userNameFocus.addListener(() {
+      if (!_userNameFocus.hasFocus) {
+        _saveAccountSilently();
+      }
     });
 
-    _aiNameCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      sp.settings.aiName = _aiNameCtrl.text.trim();
-      sp.updateSettings(sp.settings);
+    _aiNameFocus.addListener(() {
+      if (!_aiNameFocus.hasFocus) {
+        _saveAccountSilently();
+      }
     });
+  }
+
+  void _saveAccountSilently() {
+    if (!mounted) return;
+    final sp = context.read<SettingsProvider>();
+    final s = sp.settings;
+    final uName = _userNameCtrl.text.trim();
+    final aName = _aiNameCtrl.text.trim();
+    if (s.userName != uName || s.aiName != aName) {
+      s.userName = uName;
+      s.aiName = aName;
+      sp.updateSettings(s);
+    }
   }
 
   @override
   void dispose() {
+    _saveAccountSilently();
+    _userNameFocus.dispose();
+    _aiNameFocus.dispose();
     _loginAccountCtrl.dispose();
     _userNameCtrl.dispose();
     _aiNameCtrl.dispose();
@@ -68,6 +87,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     s.userName = _userNameCtrl.text.trim();
     s.aiName = _aiNameCtrl.text.trim();
     sp.updateSettings(s);
+    FocusScope.of(context).unfocus();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('账户设置已保存')),
     );
@@ -253,108 +273,113 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          // 基本资料
-          Card(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('基本资料', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
-                  // 登录账号（只读显示，注册后锁定）
-                  TextField(
-                    controller: _loginAccountCtrl,
-                    readOnly: true,
-                    decoration: InputDecoration(
-                      labelText: '登录账号',
-                      helperText: '系统注册账号 (唯一凭证，不可更改)',
-                      prefixIcon: const Icon(Icons.lock_outline, size: 20),
-                      filled: true,
-                      fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
-                      border: const OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // 用户名（聊天界面展示，可自由修改）
-                  TextField(
-                    controller: _userNameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: '聊天用户名',
-                      helperText: '聊天界面气泡中展示的昵称，可随时更改',
-                      prefixIcon: Icon(Icons.edit_outlined, size: 20),
-                      border: OutlineInputBorder(),
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: Colors.transparent,
-                        backgroundImage: ImagePickerHelper.decodeBase64Image(s.userAvatar) != null
-                            ? MemoryImage(ImagePickerHelper.decodeBase64Image(s.userAvatar)!)
-                            : null,
-                        child: ImagePickerHelper.decodeBase64Image(s.userAvatar) == null
-                            ? Container(
-                                width: 44,
-                                height: 44,
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(
-                                    colors: [Color(0xFF0284C7), Color(0xFF0EA5E9)],
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                  ),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(Icons.person, color: Colors.white, size: 24),
-                              )
-                            : null,
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // 基本资料
+            Card(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('基本资料', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 16),
+                    // 登录账号（只读显示，注册后锁定）
+                    TextField(
+                      controller: _loginAccountCtrl,
+                      readOnly: true,
+                      decoration: InputDecoration(
+                        labelText: '登录账号',
+                        helperText: '系统注册账号 (唯一凭证，不可更改)',
+                        prefixIcon: const Icon(Icons.lock_outline, size: 20),
+                        filled: true,
+                        fillColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                        border: const OutlineInputBorder(),
+                        isDense: true,
                       ),
-                      const SizedBox(width: 12),
-                      const Text('用户头像', style: TextStyle(fontSize: 14)),
-                      const Spacer(),
-                      if (s.userAvatar.isNotEmpty)
-                        IconButton(
-                          icon: const Icon(Icons.close, size: 18, color: Colors.grey),
-                          tooltip: '恢复默认',
-                          onPressed: () {
-                            s.userAvatar = '';
-                            sp.updateSettings(s);
+                    ),
+                    const SizedBox(height: 14),
+                    // 用户名（聊天界面展示，可自由修改）
+                    TextField(
+                      controller: _userNameCtrl,
+                      focusNode: _userNameFocus,
+                      decoration: const InputDecoration(
+                        labelText: '聊天用户名',
+                        helperText: '聊天界面气泡中展示的昵称，可随时更改',
+                        prefixIcon: Icon(Icons.edit_outlined, size: 20),
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 22,
+                          backgroundColor: Colors.transparent,
+                          backgroundImage: ImagePickerHelper.decodeBase64Image(s.userAvatar) != null
+                              ? MemoryImage(ImagePickerHelper.decodeBase64Image(s.userAvatar)!)
+                              : null,
+                          child: ImagePickerHelper.decodeBase64Image(s.userAvatar) == null
+                              ? Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: const BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [Color(0xFF0284C7), Color(0xFF0EA5E9)],
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                    ),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.person, color: Colors.white, size: 24),
+                                )
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        const Text('用户头像', style: TextStyle(fontSize: 14)),
+                        const Spacer(),
+                        if (s.userAvatar.isNotEmpty)
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 18, color: Colors.grey),
+                            tooltip: '恢复默认',
+                            onPressed: () {
+                              s.userAvatar = '';
+                              sp.updateSettings(s);
+                            },
+                          ),
+                        OutlinedButton.icon(
+                          icon: const Icon(Icons.image_outlined, size: 16),
+                          label: const Text('选择图片'),
+                          onPressed: () async {
+                            final base64Image = await ImagePickerHelper.pickImageAsBase64();
+                            if (base64Image != null && mounted) {
+                              s.userAvatar = base64Image;
+                              sp.updateSettings(s);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('用户头像已更新')),
+                              );
+                            }
                           },
                         ),
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.image_outlined, size: 16),
-                        label: const Text('选择图片'),
-                        onPressed: () async {
-                          final base64Image = await ImagePickerHelper.pickImageAsBase64();
-                          if (base64Image != null && mounted) {
-                            s.userAvatar = base64Image;
-                            sp.updateSettings(s);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('用户头像已更新')),
-                            );
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                  const Divider(height: 24),
-                  TextField(
-                    controller: _aiNameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'AI 助手名称',
-                      hintText: '如 Aether-X',
-                      border: OutlineInputBorder(),
-                      isDense: true,
+                      ],
                     ),
-                  ),
+                    const Divider(height: 24),
+                    TextField(
+                      controller: _aiNameCtrl,
+                      focusNode: _aiNameFocus,
+                      decoration: const InputDecoration(
+                        labelText: 'AI 助手名称',
+                        hintText: '如 Aether-X',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -553,6 +578,7 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
           ),
           const SizedBox(height: 32),
         ],
+      ),
       ),
     );
   }

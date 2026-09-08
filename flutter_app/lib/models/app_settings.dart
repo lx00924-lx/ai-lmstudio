@@ -117,10 +117,15 @@ class AppSettings {
   // --- 5. DeepSeek Harness (本地电脑 Agent 桥接) ---
   bool defaultAgentMode;
   String harnessToken;
-  String harnessServiceUrl; // 默认 http://127.0.0.1:3081
+  String harnessServiceUrl; // 默认 http://127.0.0.1:3080
+  String localBridgeWsUrl; // 默认 http://127.0.0.1:3080
+  String localAgentToken;
   String targetWorkspace;
   String targetSessionId;
   bool isHarnessOnline;
+  String agentReasoningEffort; // 'high' | 'medium' | 'low'
+  String agentPermission; // 'workspace-write' | 'read-only' | 'full-access'
+  String agentModel; // 'deepseek-v4-flash'
 
   // --- 直接展示项 ---
   String githubOwner;
@@ -164,10 +169,15 @@ class AppSettings {
     // Harness
     this.defaultAgentMode = false,
     this.harnessToken = 'agent_030efh_eg0z',
-    this.harnessServiceUrl = 'http://127.0.0.1:3081',
+    this.harnessServiceUrl = 'http://127.0.0.1:3080',
+    this.localBridgeWsUrl = 'http://127.0.0.1:3080',
+    this.localAgentToken = '',
     this.targetWorkspace = 'deepseek-agent',
     this.targetSessionId = '',
     this.isHarnessOnline = false,
+    this.agentReasoningEffort = 'high',
+    this.agentPermission = 'workspace-write',
+    this.agentModel = 'deepseek-v4-flash',
     // 辅助
     this.githubOwner = 'LX00924-LX',
     this.githubRepo = 'ai-lmstudio',
@@ -232,9 +242,14 @@ class AppSettings {
       'defaultAgentMode': defaultAgentMode,
       'harnessToken': harnessToken,
       'harnessServiceUrl': harnessServiceUrl,
+      'localBridgeWsUrl': localBridgeWsUrl,
+      'localAgentToken': localAgentToken,
       'targetWorkspace': targetWorkspace,
       'targetSessionId': targetSessionId,
       'isHarnessOnline': isHarnessOnline,
+      'agentReasoningEffort': agentReasoningEffort,
+      'agentPermission': agentPermission,
+      'agentModel': agentModel,
       'githubOwner': githubOwner,
       'githubRepo': githubRepo,
       'customDataPath': customDataPath,
@@ -304,10 +319,15 @@ class AppSettings {
       asrContextLength: (map['asrContextLength'] as num?)?.toInt() ?? 30000,
       defaultAgentMode: map['defaultAgentMode'] as bool? ?? false,
       harnessToken: map['harnessToken']?.toString() ?? 'agent_030efh_eg0z',
-      harnessServiceUrl: map['harnessServiceUrl']?.toString() ?? 'http://127.0.0.1:3081',
+      harnessServiceUrl: map['harnessServiceUrl']?.toString() ?? 'http://127.0.0.1:3080',
+      localBridgeWsUrl: map['localBridgeWsUrl']?.toString() ?? 'http://127.0.0.1:3080',
+      localAgentToken: map['localAgentToken']?.toString() ?? '',
       targetWorkspace: map['targetWorkspace']?.toString() ?? 'deepseek-agent',
       targetSessionId: map['targetSessionId']?.toString() ?? '',
       isHarnessOnline: map['isHarnessOnline'] as bool? ?? false,
+      agentReasoningEffort: map['agentReasoningEffort']?.toString() ?? 'high',
+      agentPermission: map['agentPermission']?.toString() ?? 'workspace-write',
+      agentModel: map['agentModel']?.toString() ?? 'deepseek-v4-flash',
       githubOwner: map['githubOwner']?.toString() ?? 'LX00924-LX',
       githubRepo: map['githubRepo']?.toString() ?? 'ai-lmstudio',
       customDataPath: map['customDataPath']?.toString() ?? '',

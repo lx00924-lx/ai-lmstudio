@@ -258,6 +258,43 @@ class SettingsProvider extends ChangeNotifier {
     _save();
   }
 
+  /// 更新 Agent 执行配置
+  void updateAgentExecutionOptions({
+    String? reasoningEffort,
+    String? permission,
+    String? model,
+    String? workspace,
+    String? sessionId,
+  }) {
+    if (reasoningEffort != null) _settings.agentReasoningEffort = reasoningEffort;
+    if (permission != null) _settings.agentPermission = permission;
+    if (model != null) _settings.agentModel = model;
+    if (workspace != null) _settings.targetWorkspace = workspace;
+    if (sessionId != null) _settings.targetSessionId = sessionId;
+    _save();
+  }
+
+  /// 刷新本地 Agent 连接状态
+  Future<bool> refreshAgentStatus() async {
+    final isOnline = await SyncService.instance.checkAgentStatus(_settings.harnessToken);
+    if (_settings.isHarnessOnline != isOnline) {
+      _settings.isHarnessOnline = isOnline;
+      _save();
+    }
+    return isOnline;
+  }
+
+  /// 获取本地 Agent 工作区与会话列表
+  Future<Map<String, dynamic>> fetchAgentWorkspacesAndSessions() async {
+    final data = await SyncService.instance.getAgentSessions(_settings.harnessToken);
+    final isOnline = data['online'] == true;
+    if (_settings.isHarnessOnline != isOnline) {
+      _settings.isHarnessOnline = isOnline;
+      _save();
+    }
+    return data;
+  }
+
   void _save() {
     StorageService.instance.saveSettings(_settings);
     notifyListeners();

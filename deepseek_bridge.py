@@ -12,8 +12,8 @@ DeepSeek Harness 本地安全反向桥接客户端 (DeepSeek Bridge v3.6 - 工�
 7. 适配 DeepSeek Harness (dsh 3080/v1) 标准服务与权限沙箱隔离。
 
 预填默认参数：
-  • 调度服务器: https://lx00924ai.top
-  • Harness地址: http://127.0.0.1:3081 (默认 3081/v1)
+  • 调度服务器: https://www.lx00924ai.top
+  • Harness地址: http://127.0.0.1:3080 (默认 3080/v1)
 
 使用方式：
     pip install requests websockets
@@ -117,7 +117,7 @@ def is_host_safe(url: str) -> bool:
 def parse_args():
     parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.7")
     parser.add_argument("--token", type=str, default=os.getenv("AGENT_TOKEN", ""), help="App 中生成的配对 Token")
-    parser.add_argument("--server", type=str, default=os.getenv("SERVER_URL", "https://lx00924ai.top"), help="App 调度服务器地址 (默认: https://lx00924ai.top)")
+    parser.add_argument("--server", type=str, default=os.getenv("SERVER_URL", "https://www.lx00924ai.top"), help="App 调度服务器地址 (默认: https://www.lx00924ai.top)")
     parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "http://127.0.0.1:3080"), help="本地 DeepSeek Harness / Agent 服务地址 (默认: http://127.0.0.1:3080)")
     parser.add_argument("--harness-model", type=str, default=os.getenv("HARNESS_MODEL", "deepseek-v4-flash"), help="本地 DeepSeek 模型名称 (默认: deepseek-v4-flash)")
     parser.add_argument("--chat-api-url", type=str, default=os.getenv("CHAT_API_URL", ""), help="可选：独立云端聊天推理接口 (如火山方舟 https://ark.cn-beijing.volces.com/api/v3)")
@@ -374,7 +374,7 @@ def print_terminal_qr(text: str):
 # 工业级高容错 HTTP 通信引擎
 # ======================================================================
 FALLBACK_SERVERS = [
-    "https://lx00924ai.top",
+    "https://www.lx00924ai.top",
     "https://ais-pre-lswjsr25ivxdaulzx2iy3d-135884546184.asia-northeast1.run.app",
     "https://ais-dev-lswjsr25ivxdaulzx2iy3d-135884546184.asia-northeast1.run.app"
 ]
@@ -396,7 +396,7 @@ class ResilientHttpClient:
         self.ssl_ctx = create_resilient_ssl_context()
         self.force_no_proxy = force_no_proxy
         self.custom_proxy = (custom_proxy or "").strip()
-        self.primary_server = primary_server.rstrip("/") if primary_server else "https://lx00924ai.top"
+        self.primary_server = primary_server.rstrip("/") if primary_server else "https://www.lx00924ai.top"
         
         self.direct_opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
@@ -1754,8 +1754,16 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
 
 async def run_bridge_client(args):
     token = (args.token or "").strip()
-    if not token:
-        token = "default_agent_token"
+    if not token or token in ("default_agent_token", "YOUR_AGENT_TOKEN_HERE", "<YOUR_AGENT_TOKEN>"):
+        print("\033[91m" + "=" * 70)
+        print("❌ [连接失败] 未检测到有效的 App 配对密钥 (Token)！")
+        print("   原因：当前未配置 --token 参数，或使用了默认占位符。")
+        print("   排查方案：")
+        print("   1. 打开手机/网页端 App ➔ 进入【设置 ➔ 🤖 本地 Agent (Harness)】；")
+        print("   2. 查看您的【专属配对 Token】；")
+        print("   3. 重新运行命令，例如：python deepseek_bridge.py --token \"您的真实Token\"")
+        print("=" * 70 + "\033[0m")
+        sys.exit(1)
 
     server_base = normalize_server_url(args.server)
     concurrency_limit = max(1, args.concurrency)
@@ -1763,11 +1771,11 @@ async def run_bridge_client(args):
 
     proxy_mode_desc = "强制 Direct 直连" if args.no_proxy else (f"自定义代理 ({args.proxy})" if args.proxy else "自适应系统/VPN代理")
     print("=" * 70)
-    print("\033[92m DeepSeek Harness 本地安全反向桥接启动成功！ (v3.5 高可用双模版)\033[0m")
+    print("\033[96m 正在启动 DeepSeek Harness 本地反向桥接客户端 (v3.6 安全版)...\033[0m")
     print(f" • 配对 Token     : \033[96m{token}\033[0m")
     print(f" • App 调度服务器 : \033[94m{server_base}\033[0m")
     print(f" • 网络连接模式   : \033[95m{proxy_mode_desc}\033[0m")
-    print(f" • 本地 Harness   : \033[93m{args.harness_url}\033[0m (默认 3081/v1)")
+    print(f" • 本地 Harness   : \033[93m{args.harness_url}\033[0m (默认 3080/v1)")
     print(f" • 本地模型       : {args.harness_model}")
     print(f" • 最大并发任务   : {concurrency_limit}")
     print(f" • Python 运行环境: {sys.version.split()[0]} ({sys.platform})")
@@ -1834,6 +1842,10 @@ async def run_bridge_client(args):
                                 "timestamp": int(time.time() * 1000)
                             }))
                             continue
+
+                        if mtype == "auth_error":
+                            print(f"\033[91m[❌ 授权失败] 调度中心拒绝配对: {msg.get('message', '未配置或无效的密钥')}\033[0m")
+                            return
 
                         if mtype == "token_revoked":
                             print("\033[91m[权限注销] 当前配对 Token 已在 App 端被重置或注销。桥接程序已停止。\033[0m")

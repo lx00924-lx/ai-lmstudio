@@ -238,113 +238,229 @@ class ChatProvider extends ChangeNotifier {
       await _storage.saveSession(_currentSession!);
     }
 
+    final isAgentMode = settingsProvider.settings.defaultAgentMode;
     final assistantMsg = ChatMessage(
       id: const Uuid().v4(),
       sessionId: _currentSession!.id,
       role: MessageRole.assistant,
       content: '',
-      reasoningContent: '',
+      reasoningContent: isAgentMode ? '> 🤖 正在连接本地 DeepSeek Harness 智能体调度管道...\n' : '',
       isStreaming: true,
+      isAgentMode: isAgentMode,
     );
 
     _messages.add(assistantMsg);
     _isGenerating = true;
     notifyListeners();
 
-    // 无论用户在生成过程中是否强杀 App，服务器均已收到托管生成任务，持续生成并落盘，下次启动自动同步
     final activeEp = settingsProvider.activeEndpoint;
-    SyncService.instance.requestServerBackgroundGeneration(
-      userId: settingsProvider.syncUserId,
-      assistantMessageId: assistantMsg.id,
-      messages: _messages.where((m) => !m.isStreaming).toList(),
-      clientSessionId: settingsProvider.clientSessionId,
-      settings: {
-        'apiEndpoint': activeEp?.endpoint ?? '',
-        'apiKey': activeEp?.apiKey ?? '',
-        'modelName': activeEp?.modelName ?? '',
-        'systemInstruction': settingsProvider.settings.systemPrompt,
-        'contextLength': activeEp?.contextLength ?? 30000,
-        'agentMode': settingsProvider.settings.defaultAgentMode,
-        'agentToken': settingsProvider.settings.harnessToken,
-        'agentHarnessUrl': settingsProvider.settings.harnessServiceUrl,
-        'agentWorkspace': settingsProvider.settings.targetWorkspace,
-        'agentSessionId': settingsProvider.settings.targetSessionId,
-      },
-    );
+    final agentSettings = {
+      'apiEndpoint': activeEp?.endpoint ?? '',
+      'apiKey': activeEp?.apiKey ?? '',
+      'modelName': activeEp?.modelName ?? '',
+      'systemInstruction': settingsProvider.settings.systemPrompt,
+      'contextLength': activeEp?.contextLength ?? 30000,
+      'agentMode': isAgentMode,
+      'agentToken': settingsProvider.settings.harnessToken,
+      'agentHarnessUrl': settingsProvider.settings.harnessServiceUrl,
+      'agentWorkspace': settingsProvider.settings.targetWorkspace,
+      'agentSessionId': settingsProvider.settings.targetSessionId,
+      'agentReasoningEffort': settingsProvider.settings.agentReasoningEffort,
+      'agentPermission': settingsProvider.settings.agentPermission,
+      'agentModel': settingsProvider.settings.agentModel,
+    };
+
+    // 无论用户在生成过程中是否强杀 App，服务器均已收到托管生成任务，持续生成并落盘，下次启动自动同步
+    if (!isAgentMode) {
+      SyncService.instance.requestServerBackgroundGeneration(
+        userId: settingsProvider.syncUserId,
+        assistantMessageId: assistantMsg.id,
+        messages: _messages.where((m) => !m.isStreaming).toList(),
+        clientSessionId: settingsProvider.clientSessionId,
+        settings: agentSettings,
+      );
+    }
 
     final startTime = DateTime.now();
     final cancelToken = CancelToken();
     _cancelToken = cancelToken;
 
     try {
-      final stream = _apiService.streamChatCompletion(
-        history: _messages.where((m) => !m.isStreaming).toList(),
-        settings: settingsProvider.settings,
-        cancelToken: cancelToken,
-      );
+      if (isAgentMode) {
+        // --- 走服务端中继调度 Agent 管道，确保本地 Harness 执行结果无缝回传并与 LLM 整合 ---
+        final stream = SyncService.instance.streamServerAgentChat(
+          userId: settingsProvider.syncUserId,
+          assistantMessageId: assistantMsg.id,
+          messages: _messages.where((m) => !m.isStreaming).toList(),
+          settings: agentSettings,
+          cancelToken: cancelToken,
+        );
 
-      _streamSub = stream.listen(
-        (chunk) {
-          if (chunk['done'] == true) {
+        _streamSub = stream.listen(
+          (chunk) {
+            if (chunk['error'] != null) {
+              assistantMsg.isStreaming = false;
+              assistantMsg.content += '\n\n*(智能体执行异常: ${chunk['error']})*';
+              _storage.saveMessage(assistantMsg);
+              _isGenerating = false;
+              _cancelToken = null;
+              notifyListeners();
+              return;
+            }
+
+            if (chunk['agent_started'] == true) {
+              final step = chunk['initialStep']?.toString() ?? '任务已派发至本地 Harness';
+              assistantMsg.reasoningContent = '> 🤖 $step\n';
+              notifyListeners();
+              return;
+            }
+
+            if (chunk['step'] != null) {
+              final stepText = chunk['step'].toString();
+              assistantMsg.reasoningContent = (assistantMsg.reasoningContent ?? '') + '> ⚙️ $stepText\n';
+              notifyListeners();
+              return;
+            }
+
+            if (chunk['agent_finished'] == true) {
+              assistantMsg.reasoningContent = (assistantMsg.reasoningContent ?? '') + '\n> ✅ 本地智能体执行完毕，正在整理分析结果...\n\n';
+              notifyListeners();
+              return;
+            }
+
+            if (chunk['done'] == true) {
+              assistantMsg.isStreaming = false;
+              assistantMsg.elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
+              if (chunk['fullContent'] != null && chunk['fullContent'].toString().isNotEmpty) {
+                assistantMsg.content = chunk['fullContent'].toString();
+              }
+              if (chunk['fullReasoning'] != null && chunk['fullReasoning'].toString().isNotEmpty) {
+                assistantMsg.reasoningContent = chunk['fullReasoning'].toString();
+              }
+              if (chunk['agentExecution'] is Map) {
+                assistantMsg.agentExecution = AgentExecutionRecord.fromMap(chunk['agentExecution'] as Map<dynamic, dynamic>);
+              }
+              _storage.saveMessage(assistantMsg);
+              SyncService.instance.pushMessages(
+                userId: settingsProvider.syncUserId,
+                messages: [assistantMsg],
+                clientSessionId: settingsProvider.clientSessionId,
+              );
+              _isGenerating = false;
+              _cancelToken = null;
+              notifyListeners();
+              return;
+            }
+
+            final contentDelta = chunk['content'] as String? ?? '';
+            final reasoningDelta = chunk['reasoning'] as String? ?? '';
+
+            if (reasoningDelta.isNotEmpty) {
+              assistantMsg.reasoningContent = (assistantMsg.reasoningContent ?? '') + reasoningDelta;
+            }
+            if (contentDelta.isNotEmpty) {
+              assistantMsg.content += contentDelta;
+            }
+            notifyListeners();
+          },
+          onError: (err) {
+            if (err is DioException && CancelToken.isCancel(err)) {
+              return;
+            }
             assistantMsg.isStreaming = false;
-            assistantMsg.elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
+            assistantMsg.content += '\n\n*(连接中断或 Agent 离线，请检查电脑端桥接脚本)*';
             _storage.saveMessage(assistantMsg);
-            SyncService.instance.pushMessages(
-              userId: settingsProvider.syncUserId,
-              messages: [assistantMsg],
-              clientSessionId: settingsProvider.clientSessionId,
-            );
             _isGenerating = false;
             _cancelToken = null;
             notifyListeners();
-            return;
-          }
+          },
+          onDone: () {
+            if (assistantMsg.isStreaming) {
+              assistantMsg.isStreaming = false;
+              assistantMsg.elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
+              _storage.saveMessage(assistantMsg);
+              _isGenerating = false;
+              _cancelToken = null;
+              notifyListeners();
+            }
+          },
+        );
+      } else {
+        // --- 非 Agent 模式：直连模型接口流式输出 ---
+        final stream = _apiService.streamChatCompletion(
+          history: _messages.where((m) => !m.isStreaming).toList(),
+          settings: settingsProvider.settings,
+          cancelToken: cancelToken,
+        );
 
-          final contentDelta = chunk['content'] as String? ?? '';
-          final reasoningDelta = chunk['reasoning'] as String? ?? '';
+        _streamSub = stream.listen(
+          (chunk) {
+            if (chunk['done'] == true) {
+              assistantMsg.isStreaming = false;
+              assistantMsg.elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
+              _storage.saveMessage(assistantMsg);
+              SyncService.instance.pushMessages(
+                userId: settingsProvider.syncUserId,
+                messages: [assistantMsg],
+                clientSessionId: settingsProvider.clientSessionId,
+              );
+              _isGenerating = false;
+              _cancelToken = null;
+              notifyListeners();
+              return;
+            }
 
-          if (reasoningDelta.isNotEmpty) {
-            assistantMsg.reasoningContent = (assistantMsg.reasoningContent ?? '') + reasoningDelta;
-          }
-          if (contentDelta.isNotEmpty) {
-            assistantMsg.content += contentDelta;
-          }
-          notifyListeners();
-        },
-        onError: (err) {
-          if (err is DioException && CancelToken.isCancel(err)) {
-            return;
-          }
-          final isConnErr = err is SocketException ||
-              (err is DioException && (err.type == DioExceptionType.connectionError || err.type == DioExceptionType.connectionTimeout));
-          if (isConnErr && assistantMsg.content.isEmpty && (assistantMsg.reasoningContent?.isEmpty ?? true)) {
-            userMsg.status = 'error';
-            _storage.saveMessage(userMsg);
-            _messages.remove(assistantMsg);
-            _storage.deleteMessage(assistantMsg.id);
+            final contentDelta = chunk['content'] as String? ?? '';
+            final reasoningDelta = chunk['reasoning'] as String? ?? '';
+
+            if (reasoningDelta.isNotEmpty) {
+              assistantMsg.reasoningContent = (assistantMsg.reasoningContent ?? '') + reasoningDelta;
+            }
+            if (contentDelta.isNotEmpty) {
+              assistantMsg.content += contentDelta;
+            }
+            notifyListeners();
+          },
+          onError: (err) {
+            if (err is DioException && CancelToken.isCancel(err)) {
+              return;
+            }
+            final isConnErr = err is SocketException ||
+                (err is DioException && (err.type == DioExceptionType.connectionError || err.type == DioExceptionType.connectionTimeout));
+            if (isConnErr && assistantMsg.content.isEmpty && (assistantMsg.reasoningContent?.isEmpty ?? true)) {
+              userMsg.status = 'error';
+              _storage.saveMessage(userMsg);
+              _messages.remove(assistantMsg);
+              _storage.deleteMessage(assistantMsg.id);
+              _isGenerating = false;
+              _cancelToken = null;
+              notifyListeners();
+              return;
+            }
+            assistantMsg.isStreaming = false;
+            assistantMsg.content += '\n\n*(请求异常，请检查 API Key 或网络设置)*';
+            _storage.saveMessage(assistantMsg);
             _isGenerating = false;
             _cancelToken = null;
             notifyListeners();
-            return;
-          }
-          assistantMsg.isStreaming = false;
-          assistantMsg.content += '\n\n*(请求异常，请检查 API Key 或网络设置)*';
-          _storage.saveMessage(assistantMsg);
-          _isGenerating = false;
-          _cancelToken = null;
-          notifyListeners();
-        },
-        onDone: () {
-          if (assistantMsg.isStreaming) {
-            assistantMsg.isStreaming = false;
-            assistantMsg.elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
-            _storage.saveMessage(assistantMsg);
-            SyncService.instance.pushMessages(
-              userId: settingsProvider.syncUserId,
-              messages: [assistantMsg],
-              clientSessionId: settingsProvider.clientSessionId,
-            );
-          }
+          },
+          onDone: () {
+            if (assistantMsg.isStreaming) {
+              assistantMsg.isStreaming = false;
+              assistantMsg.elapsedSeconds = DateTime.now().difference(startTime).inSeconds;
+              _storage.saveMessage(assistantMsg);
+              SyncService.instance.pushMessages(
+                userId: settingsProvider.syncUserId,
+                messages: [assistantMsg],
+                clientSessionId: settingsProvider.clientSessionId,
+              );
+            }
+            _isGenerating = false;
+            _cancelToken = null;
+            notifyListeners();
+          },
+        );
+      }
           _isGenerating = false;
           _cancelToken = null;
           notifyListeners();

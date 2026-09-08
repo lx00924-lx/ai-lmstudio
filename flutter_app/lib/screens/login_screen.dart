@@ -31,11 +31,6 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    // 预填已有账号（如有）方便登录
-    final sp = context.read<SettingsProvider>();
-    if (sp.settings.loginAccount.isNotEmpty) {
-      _loginAccountCtrl.text = sp.settings.loginAccount;
-    }
   }
 
   @override

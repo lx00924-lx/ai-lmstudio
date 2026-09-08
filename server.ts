@@ -3,11 +3,15 @@ import FormData from "form-data";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { WebSocketServer, WebSocket as WSWebSocket } from "ws";
+import { EventEmitter } from "events";
 import path from "path";
 import fs from "fs/promises";
 import multer from "multer";
 import { createServer as createViteServer } from "vite";
 import cors from "cors";
+
+const generationEvents = new EventEmitter();
+generationEvents.setMaxListeners(500);
 
 const PORT = 3000;
 const MESSAGES_FILE = path.join(process.cwd(), "messages_data", "messages_v2.json"); // Use v2 to avoid conflicts
@@ -289,6 +293,13 @@ async function runServerSideGeneration({
         fullContent: accumulatedContent,
         fullReasoning: accumulatedReasoning,
       });
+      generationEvents.emit(`chunk_${assistantMessageId}`, {
+        messageId: assistantMessageId,
+        chunk,
+        reasoningChunk: reasoningChunk || "",
+        fullContent: accumulatedContent,
+        fullReasoning: accumulatedReasoning,
+      });
     };
 
     let workingMessages = [...messages];
@@ -304,7 +315,7 @@ async function runServerSideGeneration({
 
       if (!isAgentOnline) {
         // Agent is offline
-        const offlineNotice = `> ⚠️ **【本地 Agent 模式提示】**\n> 检测到您已开启 **Agent 模式**，但未检测到本地 DeepSeek Harness 桥接连接。\n>\n> **快速解决**：\n> 1. 打开应用右上角 **设置 ➔ 🤖 本地 Agent**；\n> 2. 复制启动命令并在本地终端运行：\`python deepseek_bridge.py --token "${agentToken}" --server "https://lx00924ai.top" --harness-url "http://127.0.0.1:3081"\`；\n> 3. 或在聊天输入框左侧一键切换回 **「💬 普通模式」**。`;
+        const offlineNotice = `> ⚠️ **【本地 Agent 模式提示】**\n> 检测到您已开启 **Agent 模式**，但未检测到本地 DeepSeek Harness 桥接连接。\n>\n> **快速解决**：\n> 1. 打开应用右上角 **设置 ➔ 🤖 本地 Agent**；\n> 2. 复制启动命令并在本地终端运行：\`python deepseek_bridge.py --token "${agentToken}" --server "https://www.lx00924ai.top" --harness-url "http://127.0.0.1:3080"\`；\n> 3. 或在聊天输入框左侧一键切换回 **「💬 普通模式」**。`;
         
         onChunk(offlineNotice);
         genState.status = 'completed';
@@ -339,6 +350,11 @@ async function runServerSideGeneration({
       console.log(`[Agent Hub] Dispatching task ${taskId} to agent for token [${agentToken}] (mode: ${agent.mode || 'ws'})`);
 
       io.to(`user_${userId}`).emit("agent_task_started", {
+        messageId: assistantMessageId,
+        taskId,
+        initialStep: "已将需求派发至本地 DeepSeek Harness 智能体..."
+      });
+      generationEvents.emit(`task_started_${assistantMessageId}`, {
         messageId: assistantMessageId,
         taskId,
         initialStep: "已将需求派发至本地 DeepSeek Harness 智能体..."
@@ -414,6 +430,11 @@ async function runServerSideGeneration({
         };
 
         io.to(`user_${userId}`).emit("agent_task_finished", {
+          messageId: assistantMessageId,
+          taskId,
+          result: agentExecutionResult
+        });
+        generationEvents.emit(`task_finished_${assistantMessageId}`, {
           messageId: assistantMessageId,
           taskId,
           result: agentExecutionResult
@@ -659,6 +680,13 @@ async function runServerSideGeneration({
       isAgentMode: isAgentMode || false,
       agentExecution: agentExecutionResult
     });
+    generationEvents.emit(`completed_${assistantMessageId}`, {
+      messageId: assistantMessageId,
+      content: accumulatedContent,
+      reasoningContent: accumulatedReasoning,
+      isAgentMode: isAgentMode || false,
+      agentExecution: agentExecutionResult
+    });
     console.log(`[Server Background Gen] Completed for msg ${assistantMessageId} (${accumulatedContent.length} chars)`);
 
   } catch (err: any) {
@@ -677,6 +705,10 @@ async function runServerSideGeneration({
     await upsertMessage(userId, errorAssistantMessage);
 
     io.to(`user_${userId}`).emit("chat_error", {
+      messageId: assistantMessageId,
+      error: err.message || "生成失败",
+    });
+    generationEvents.emit(`error_${assistantMessageId}`, {
       messageId: assistantMessageId,
       error: err.message || "生成失败",
     });
@@ -979,6 +1011,119 @@ async function startServer() {
     });
 
     res.json({ success: true, messageId: assistantMessageId, status: "generating" });
+  });
+
+  // Server-side SSE Chat Stream (Streams Agent Execution & Final LLM Tokens in Realtime)
+  app.post("/api/chat/stream", async (req, res) => {
+    const { userId = "guest", assistantMessageId, messages, settings } = req.body;
+    if (!assistantMessageId || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Invalid parameters" });
+    }
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    let isClosed = false;
+    const sendEvent = (event: string, data: any) => {
+      if (isClosed) return;
+      try {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        (res as any).flush?.();
+      } catch {}
+    };
+
+    const chunkHandler = (data: any) => {
+      if (data.messageId === assistantMessageId) {
+        sendEvent("chunk", {
+          content: data.chunk,
+          reasoning: data.reasoningChunk,
+          fullContent: data.fullContent,
+          fullReasoning: data.fullReasoning,
+        });
+      }
+    };
+
+    const stepHandler = (data: any) => {
+      sendEvent("step", { step: data.step, taskId: data.taskId });
+    };
+
+    const taskStartedHandler = (data: any) => {
+      if (data.messageId === assistantMessageId) {
+        sendEvent("agent_started", { initialStep: data.initialStep, taskId: data.taskId });
+      }
+    };
+
+    const taskFinishedHandler = (data: any) => {
+      if (data.messageId === assistantMessageId) {
+        sendEvent("agent_finished", { result: data.result, taskId: data.taskId });
+      }
+    };
+
+    const completedHandler = (data: any) => {
+      if (data.messageId === assistantMessageId) {
+        sendEvent("done", {
+          fullContent: data.content,
+          fullReasoning: data.reasoningContent,
+          agentExecution: data.agentExecution,
+        });
+        cleanup();
+        if (!isClosed) {
+          isClosed = true;
+          res.end();
+        }
+      }
+    };
+
+    const errorHandler = (data: any) => {
+      if (data.messageId === assistantMessageId) {
+        sendEvent("error", { error: data.error });
+        cleanup();
+        if (!isClosed) {
+          isClosed = true;
+          res.end();
+        }
+      }
+    };
+
+    const cleanup = () => {
+      generationEvents.off(`chunk_${assistantMessageId}`, chunkHandler);
+      generationEvents.off(`step_${assistantMessageId}`, stepHandler);
+      generationEvents.off(`task_started_${assistantMessageId}`, taskStartedHandler);
+      generationEvents.off(`task_finished_${assistantMessageId}`, taskFinishedHandler);
+      generationEvents.off(`completed_${assistantMessageId}`, completedHandler);
+      generationEvents.off(`error_${assistantMessageId}`, errorHandler);
+    };
+
+    req.on("close", () => {
+      isClosed = true;
+      cleanup();
+    });
+
+    generationEvents.on(`chunk_${assistantMessageId}`, chunkHandler);
+    generationEvents.on(`step_${assistantMessageId}`, stepHandler);
+    generationEvents.on(`task_started_${assistantMessageId}`, taskStartedHandler);
+    generationEvents.on(`task_finished_${assistantMessageId}`, taskFinishedHandler);
+    generationEvents.on(`completed_${assistantMessageId}`, completedHandler);
+    generationEvents.on(`error_${assistantMessageId}`, errorHandler);
+
+    // Trigger or connect to background generation
+    runServerSideGeneration({
+      userId,
+      assistantMessageId,
+      messages,
+      settings: settings || {},
+      io,
+    }).catch((err) => {
+      sendEvent("error", { error: err.message });
+      cleanup();
+      if (!isClosed) {
+        isClosed = true;
+        res.end();
+      }
+    });
   });
 
   // Settings API
@@ -1425,7 +1570,7 @@ async function startServer() {
   // Dedicated API download route for Windows 1-Click .bat package
   app.get(["/api/download/run_bridge.bat", "/api/download/start.bat"], (req, res) => {
     const token = ((req.query.token as string) || "default_agent_token").trim();
-    const harnessUrl = ((req.query.harnessUrl as string) || "http://127.0.0.1:3081").trim();
+    const harnessUrl = ((req.query.harnessUrl as string) || "http://127.0.0.1:3080").trim();
     
     // Determine host URL
     const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
@@ -1939,8 +2084,8 @@ if %errorlevel% neq 0 (
   app.get("/api/agent/download-bat", (req, res) => {
     try {
       const token = (req.query.token as string)?.trim() || "default_agent_token";
-      const serverUrl = (req.query.server as string)?.trim() || "https://lx00924ai.top";
-      const harnessUrl = (req.query.harness as string)?.trim() || "http://127.0.0.1:3081";
+      const serverUrl = (req.query.server as string)?.trim() || "https://www.lx00924ai.top";
+      const harnessUrl = (req.query.harness as string)?.trim() || "http://127.0.0.1:3080";
       const batContent = `@echo off
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
@@ -2024,8 +2169,18 @@ if %errorlevel% neq 0 (
   agentWss.on("connection", (clientWs, request) => {
     try {
       const requestUrl = new URL(request.url || "", `http://${request.headers.host || "localhost"}`);
-      let token = requestUrl.searchParams.get("token")?.trim() || "default_agent_token";
+      let token = requestUrl.searchParams.get("token")?.trim() || "";
       let clientName = requestUrl.searchParams.get("clientName")?.trim() || "DeepSeek-Harness-Local";
+
+      if (!token || token === "YOUR_AGENT_TOKEN_HERE" || token === "<YOUR_AGENT_TOKEN>") {
+        console.warn(`[Agent Hub] Rejected agent connection: missing or placeholder token`);
+        clientWs.send(JSON.stringify({
+          type: "auth_error",
+          message: "未配置有效的 App 配对密钥 (Token)，请在 App 设置中查看专属配对 Token 并携带 --token 重新运行"
+        }));
+        setTimeout(() => clientWs.close(4001, "Token required"), 500);
+        return;
+      }
 
       console.log(`\x1b[32m[Agent Hub] Local Agent connected with token [${token}] (${clientName})\x1b[0m`);
       const agentInfo: ConnectedAgent = {
@@ -2059,6 +2214,13 @@ if %errorlevel% neq 0 (
               taskId: msg.taskId,
               step: msg.step,
             });
+            const pending = pendingAgentTasks.get(msg.taskId);
+            if (pending) {
+              generationEvents.emit(`step_${pending.assistantMessageId}`, {
+                taskId: msg.taskId,
+                step: msg.step,
+              });
+            }
           } else if (msg.type === "agent_result") {
             console.log(`[Agent Hub] Agent task completed: ${msg.taskId} (success: ${msg.success})`);
             const pending = pendingAgentTasks.get(msg.taskId);

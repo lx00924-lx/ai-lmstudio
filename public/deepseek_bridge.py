@@ -12,8 +12,8 @@ DeepSeek Harness 本地安全反向桥接客户端 (DeepSeek Bridge v3.6 - 工�
 7. 适配 DeepSeek Harness (dsh 3080/v1) 标准服务与权限沙箱隔离。
 
 预填默认参数：
-  • 调度服务器: https://lx00924ai.top
-  • Harness地址: http://127.0.0.1:3081 (默认 3081/v1)
+  • 调度服务器: https://www.lx00924ai.top
+  • Harness地址: http://127.0.0.1:3080 (默认 3080/v1)
 
 使用方式：
     pip install requests websockets
@@ -115,11 +115,11 @@ def is_host_safe(url: str) -> bool:
         return False
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.6")
+    parser = argparse.ArgumentParser(description="DeepSeek Harness Local Reverse Bridge v3.7")
     parser.add_argument("--token", type=str, default=os.getenv("AGENT_TOKEN", ""), help="App 中生成的配对 Token")
-    parser.add_argument("--server", type=str, default=os.getenv("SERVER_URL", "https://lx00924ai.top"), help="App 调度服务器地址 (默认: https://lx00924ai.top)")
-    parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "http://127.0.0.1:3081"), help="本地 DeepSeek Harness / Agent 服务地址 (默认: http://127.0.0.1:3081)")
-    parser.add_argument("--harness-model", type=str, default=os.getenv("HARNESS_MODEL", "deepseek-chat"), help="本地 DeepSeek 模型名称 (默认: deepseek-chat)")
+    parser.add_argument("--server", type=str, default=os.getenv("SERVER_URL", "https://www.lx00924ai.top"), help="App 调度服务器地址 (默认: https://www.lx00924ai.top)")
+    parser.add_argument("--harness-url", type=str, default=os.getenv("HARNESS_URL", "http://127.0.0.1:3080"), help="本地 DeepSeek Harness / Agent 服务地址 (默认: http://127.0.0.1:3080)")
+    parser.add_argument("--harness-model", type=str, default=os.getenv("HARNESS_MODEL", "deepseek-v4-flash"), help="本地 DeepSeek 模型名称 (默认: deepseek-v4-flash)")
     parser.add_argument("--chat-api-url", type=str, default=os.getenv("CHAT_API_URL", ""), help="可选：独立云端聊天推理接口 (如火山方舟 https://ark.cn-beijing.volces.com/api/v3)")
     parser.add_argument("--chat-api-key", type=str, default=os.getenv("CHAT_API_KEY", ""), help="可选：云端聊天 API Key")
     parser.add_argument("--chat-model", type=str, default=os.getenv("CHAT_MODEL", ""), help="可选：云端聊天模型名称 (如 deepseek-v4-pro-ga-260813)")
@@ -374,7 +374,7 @@ def print_terminal_qr(text: str):
 # 工业级高容错 HTTP 通信引擎
 # ======================================================================
 FALLBACK_SERVERS = [
-    "https://lx00924ai.top",
+    "https://www.lx00924ai.top",
     "https://ais-pre-lswjsr25ivxdaulzx2iy3d-135884546184.asia-northeast1.run.app",
     "https://ais-dev-lswjsr25ivxdaulzx2iy3d-135884546184.asia-northeast1.run.app"
 ]
@@ -396,7 +396,7 @@ class ResilientHttpClient:
         self.ssl_ctx = create_resilient_ssl_context()
         self.force_no_proxy = force_no_proxy
         self.custom_proxy = (custom_proxy or "").strip()
-        self.primary_server = primary_server.rstrip("/") if primary_server else "https://lx00924ai.top"
+        self.primary_server = primary_server.rstrip("/") if primary_server else "https://www.lx00924ai.top"
         
         self.direct_opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
@@ -734,6 +734,337 @@ async def query_dsh_workspaces_and_sessions(harness_url: str):
 
     return workspaces, sessions
 
+ACTIVE_SESSION_REGISTRY = {}
+
+async def query_dsh_models(harness_url: str):
+    """从本地 DSH (3080/3081) 获取可用模型列表与各模型的思考深度(推理等级)"""
+    harness_base = harness_url.rstrip("/")
+    loop = asyncio.get_running_loop()
+    candidates = [f"{harness_base}/v1/models"]
+    if "3080" in harness_base:
+        candidates.append(f"{harness_base.replace('3080', '3081')}/v1/models")
+    elif "3081" in harness_base:
+        candidates.append(f"{harness_base.replace('3081', '3080')}/v1/models")
+
+    for url in candidates:
+        def do_req():
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json", "User-Agent": "AetherX-Bridge/3.7"},
+                method="GET"
+            )
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=3) as resp:
+                return resp.read().decode("utf-8")
+        try:
+            raw = await loop.run_in_executor(None, do_req)
+            if is_html_content(raw):
+                continue
+            data = json.loads(raw)
+            if isinstance(data, dict) and "models" in data:
+                return data.get("models", [])
+            elif isinstance(data, list):
+                return data
+        except Exception:
+            continue
+    return []
+
+async def abort_dsh_session(harness_url: str, session_id: str):
+    """中止本地 DSH 正在运行的任务轮次 (POST /v1/sessions/:id/abort)"""
+    if not session_id:
+        return False, "缺少 sessionId"
+    harness_base = harness_url.rstrip("/")
+    loop = asyncio.get_running_loop()
+    candidates = [
+        f"{harness_base}/v1/sessions/{urllib.parse.quote(session_id)}/abort",
+        f"{harness_base}/v1/agent/abort"
+    ]
+    if "3080" in harness_base:
+        candidates.append(f"{harness_base.replace('3080', '3081')}/v1/sessions/{urllib.parse.quote(session_id)}/abort")
+
+    for url in candidates:
+        def do_abort():
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({"sessionId": session_id, "reason": "user_cancelled"}).encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
+                method="POST"
+            )
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=3) as resp:
+                return resp.read().decode("utf-8")
+        try:
+            raw = await loop.run_in_executor(None, do_abort)
+            return True, raw
+        except Exception as e:
+            continue
+    return False, "未能连接到 DSH 中止接口"
+
+async def approve_dsh_session(harness_url: str, session_id: str, approval_id: str, action: str = "allow"):
+    """向本地 DSH 提交越权操作的审批结果 (POST /v1/sessions/:id/approve)"""
+    harness_base = harness_url.rstrip("/")
+    loop = asyncio.get_running_loop()
+    candidates = [
+        f"{harness_base}/v1/sessions/{urllib.parse.quote(session_id)}/approve",
+        f"{harness_base}/v1/agent/approve"
+    ]
+    if "3080" in harness_base:
+        candidates.append(f"{harness_base.replace('3080', '3081')}/v1/sessions/{urllib.parse.quote(session_id)}/approve")
+
+    for url in candidates:
+        def do_approve():
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({"approvalId": approval_id, "action": action}).encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
+                method="POST"
+            )
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=4) as resp:
+                return resp.read().decode("utf-8")
+        try:
+            raw = await loop.run_in_executor(None, do_approve)
+            return True, raw
+        except Exception as e:
+            continue
+    return False, "提交审批失败"
+
+async def rename_dsh_session(harness_url: str, session_id: str, title: str):
+    """重命名本地 DSH 会话 (PATCH /v1/sessions/:id)"""
+    if not session_id or not title:
+        return False, "缺少会话ID或标题"
+    harness_base = harness_url.rstrip("/")
+    loop = asyncio.get_running_loop()
+    candidates = [f"{harness_base}/v1/sessions/{urllib.parse.quote(session_id)}"]
+    if "3080" in harness_base:
+        candidates.append(f"{harness_base.replace('3080', '3081')}/v1/sessions/{urllib.parse.quote(session_id)}")
+
+    for url in candidates:
+        def do_patch():
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({"title": title}).encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=utf-8", "Accept": "application/json"},
+                method="PATCH"
+            )
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=3) as resp:
+                return resp.read().decode("utf-8")
+        try:
+            raw = await loop.run_in_executor(None, do_patch)
+            return True, raw
+        except Exception:
+            continue
+    return False, "重命名失败"
+
+async def archive_dsh_session(harness_url: str, session_id: str):
+    """归档本地 DSH 会话 (DELETE /v1/sessions/:id)"""
+    if not session_id:
+        return False, "缺少会话ID"
+    harness_base = harness_url.rstrip("/")
+    loop = asyncio.get_running_loop()
+    candidates = [f"{harness_base}/v1/sessions/{urllib.parse.quote(session_id)}"]
+    if "3080" in harness_base:
+        candidates.append(f"{harness_base.replace('3080', '3081')}/v1/sessions/{urllib.parse.quote(session_id)}")
+
+    for url in candidates:
+        def do_del():
+            req = urllib.request.Request(
+                url,
+                headers={"Accept": "application/json"},
+                method="DELETE"
+            )
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=3) as resp:
+                return resp.read().decode("utf-8")
+        try:
+            raw = await loop.run_in_executor(None, do_del)
+            return True, raw
+        except Exception:
+            continue
+    return False, "归档失败"
+
+async def execute_dsh_sse_stream(
+    harness_base: str,
+    target_workspace: str,
+    model_name: str,
+    active_session_id: str,
+    prompt: str,
+    reasoning_effort: str,
+    permission: str,
+    on_step_callback,
+    extra_chat_config: dict = None,
+    on_approval_callback = None
+):
+    """
+    通过 DSH 3080 SSE 流式端点 (POST /v1/agent/prompt/stream) 执行任务并实时推送思考与工具事件
+    """
+    loop = asyncio.get_running_loop()
+    endpoints = [
+        f"{harness_base}/v1/agent/prompt/stream",
+        f"{harness_base}/v1/agent/prompt"
+    ]
+    if "3080" in harness_base:
+        endpoints.append(f"{harness_base.replace('3080', '3081')}/v1/agent/prompt/stream")
+    elif "3081" in harness_base:
+        endpoints.append(f"{harness_base.replace('3081', '3080')}/v1/agent/prompt/stream")
+
+    real_session_id = None
+    if active_session_id and active_session_id not in ("__auto__", "__auto_new__", "default_session", "none", "null"):
+        real_session_id = active_session_id
+
+    payload = {
+        "prompt": prompt or "",
+        "model": model_name or "deepseek-v4-flash",
+        "workspace": target_workspace or "deepseek-agent"
+    }
+    if real_session_id:
+        payload["sessionId"] = real_session_id
+    if reasoning_effort and reasoning_effort != "default":
+        payload["reasoningEffort"] = reasoning_effort
+        payload["reasoning_effort"] = reasoning_effort
+    if permission:
+        payload["permission"] = permission
+    else:
+        payload["permission"] = "workspace-write"
+
+    req_data = json.dumps(payload).encode("utf-8")
+
+    for target_url in endpoints:
+        def stream_request_worker(q: asyncio.Queue):
+            headers = {
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "text/event-stream, application/json",
+                "User-Agent": "AetherX-Bridge/3.7"
+            }
+            auth_key = (extra_chat_config or {}).get("apiKey")
+            if auth_key:
+                headers["Authorization"] = f"Bearer {auth_key}"
+
+            req = urllib.request.Request(target_url, data=req_data, headers=headers, method="POST")
+            try:
+                with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=600) as response:
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/event-stream" not in content_type and "json" in content_type:
+                        # 非 SSE，按普通 JSON 读取
+                        raw_body = response.read().decode("utf-8")
+                        loop.call_soon_threadsafe(q.put_nowait, ("sync_json", raw_body))
+                        return
+
+                    current_event = "message"
+                    data_lines = []
+
+                    while True:
+                        raw_line = response.readline()
+                        if not raw_line:
+                            break
+                        line = raw_line.decode("utf-8", errors="replace")
+                        line_s = line.strip()
+
+                        # 心跳保持
+                        if line_s.startswith(":"):
+                            continue
+
+                        if line_s.startswith("event:"):
+                            current_event = line_s[6:].strip()
+                        elif line_s.startswith("data:"):
+                            data_lines.append(line_s[5:].strip())
+                        elif line_s == "":
+                            # 空行标志着一次 SSE 数据块完成
+                            if data_lines:
+                                chunk_data = "\n".join(data_lines)
+                                loop.call_soon_threadsafe(q.put_nowait, (current_event, chunk_data))
+                                data_lines = []
+                                current_event = "message"
+
+                    loop.call_soon_threadsafe(q.put_nowait, ("stream_end", None))
+            except Exception as e:
+                loop.call_soon_threadsafe(q.put_nowait, ("stream_error", str(e)))
+
+        msg_queue = asyncio.Queue()
+        stream_thread = threading.Thread(target=stream_request_worker, args=(msg_queue,), daemon=True)
+        stream_thread.start()
+
+        accumulated_content = []
+        accumulated_reasoning = []
+        received_any_event = False
+
+        while True:
+            try:
+                ev_type, ev_data = await asyncio.wait_for(msg_queue.get(), timeout=20.0)
+            except asyncio.TimeoutError:
+                if received_any_event:
+                    # 如果有持续收到过流，超时 20s 可能是长命令输出间歇，继续等待
+                    continue
+                else:
+                    break
+
+            if ev_type == "stream_error":
+                break
+
+            if ev_type == "stream_end":
+                break
+
+            received_any_event = True
+
+            if ev_type == "sync_json":
+                try:
+                    j = json.loads(ev_data)
+                    extracted = extract_text_from_obj(j)
+                    if extracted and not is_html_content(extracted):
+                        return True, extracted
+                except Exception:
+                    pass
+                break
+
+            # 处理 SSE 结构
+            try:
+                parsed_json = json.loads(ev_data) if ev_data else {}
+            except Exception:
+                parsed_json = {"raw": ev_data}
+
+            if ev_type == "reasoning":
+                txt = parsed_json.get("content", "")
+                if txt:
+                    accumulated_reasoning.append(txt)
+                    await on_step_callback(f"💭 {txt}")
+            elif ev_type == "content":
+                txt = parsed_json.get("content", "")
+                if txt:
+                    accumulated_content.append(txt)
+            elif ev_type == "tool_start":
+                tool_name = parsed_json.get("tool", "工具")
+                tool_input = parsed_json.get("input", "")
+                inp_str = str(tool_input)
+                if len(inp_str) > 120: inp_str = inp_str[:120] + "..."
+                await on_step_callback(f"🔧 [执行工具] {tool_name}: {inp_str}")
+            elif ev_type == "tool_end":
+                tool_name = parsed_json.get("tool", "工具")
+                status = parsed_json.get("status", "success")
+                await on_step_callback(f"✓ [工具完成] {tool_name} (状态: {status})")
+            elif ev_type == "waiting_approval":
+                approval_id = parsed_json.get("approvalId")
+                tool_name = parsed_json.get("tool", "越权操作")
+                await on_step_callback(f"⚠️ [等待审批] 本地 Agent 正在请求执行敏感操作: {tool_name} (审批ID: {approval_id})")
+                if on_approval_callback:
+                    await on_approval_callback(parsed_json)
+            elif ev_type == "approval_resolved":
+                outcome = parsed_json.get("outcome", "")
+                await on_step_callback(f"✓ [审批结果] 操作已被裁决: {outcome}")
+            elif ev_type == "done":
+                await on_step_callback(f"✅ [执行完成] 本地智能体已完成本轮所有操作")
+                break
+            elif ev_type == "error":
+                err_msg = parsed_json.get("message", ev_data)
+                await on_step_callback(f"❌ [DSH 报错] {err_msg}")
+                break
+
+        final_content = "".join(accumulated_content).strip()
+        if final_content and not is_html_content(final_content):
+            return True, final_content
+
+        if accumulated_reasoning:
+            fallback_res = "".join(accumulated_reasoning).strip()
+            if fallback_res:
+                return True, f"【思考过程】\n{fallback_res}"
+
+    return False, None
+
 async def create_dsh_session_explicit(harness_url: str, workspace: str = "deepseek-agent", title: str = None, model: str = "deepseek-chat"):
     global LOCAL_SESSION_CACHE
     harness_base = harness_url.rstrip("/")
@@ -1011,7 +1342,8 @@ async def execute_local_harness(
     session_id: str,
     on_step_callback,
     extra_chat_config: dict = None,
-    target_workspace: str = "deepseek-agent"
+    target_workspace: str = "deepseek-agent",
+    on_approval_callback = None
 ):
     harness_base = harness_url.rstrip("/")
     extra_chat_config = extra_chat_config or {}
@@ -1026,6 +1358,37 @@ async def execute_local_harness(
     await on_step_callback(f"🚀 [1/3] 已接收到任务，正在调用本地 DeepSeek Harness Agent ({model_name})...")
 
     active_session_id = (session_id or "").strip()
+    real_session_id = None
+    if active_session_id and active_session_id not in ("__auto__", "__auto_new__", "default_session", "none", "null"):
+        real_session_id = active_session_id
+
+    # 登记当前运行中的任务以支持一键中止 (Abort)
+    ACTIVE_SESSION_REGISTRY[task_id] = {
+        "harness_url": harness_url,
+        "session_id": real_session_id or active_session_id
+    }
+
+    try:
+        # 0. 最优先尝试 DSH 3080/3081 原生 SSE 流式端点 (/v1/agent/prompt/stream)
+        reasoning_effort = extra_chat_config.get("reasoningEffort") or extra_chat_config.get("reasoning_effort") or ""
+        permission = extra_chat_config.get("permission") or "workspace-write"
+        sse_ok, sse_out = await execute_dsh_sse_stream(
+            harness_base,
+            target_workspace,
+            model_name,
+            active_session_id,
+            prompt,
+            reasoning_effort=reasoning_effort,
+            permission=permission,
+            on_step_callback=on_step_callback,
+            extra_chat_config=extra_chat_config,
+            on_approval_callback=on_approval_callback
+        )
+        if sse_ok and sse_out and not is_html_content(sse_out):
+            await on_step_callback("✅ [3/3] 本地 DeepSeek Harness 智能体已完成本轮所有操作，正在向 App 调度中心回传结果...")
+            return True, str(sse_out)
+    except Exception as sse_e:
+        logger.debug(f"SSE 流式尝试暂不可用: {sse_e}，无缝回退至适配器通道")
 
     content_list = []
     if messages and isinstance(messages, list):
@@ -1040,31 +1403,45 @@ async def execute_local_harness(
     if not content_list:
         content_list = [{"type": "text", "text": str(prompt or "")}]
 
-    # 1. 优先尝试本地 3081 HTTP 适配器 (用户在 DSH 运行的 Node 适配服务)
+    # 1. 尝试本地 3081/3080 HTTP 适配器
     adapter_base = harness_base
     if "3080" in harness_base:
         adapter_base = harness_base.replace("3080", "3081")
 
     candidate_endpoints = []
     
-    # 3081 适配器候选接口
-    if "3081" in adapter_base or "3080" in harness_base:
-        candidate_endpoints.append((f"{adapter_base}/v1/chat/completions", {
-            "model": model_name or "deepseek-chat",
-            "messages": messages if messages else [{"role": "user", "content": prompt}],
-            "stream": False
-        }, "DSH 3081 HTTP 适配器 (/v1/chat/completions)"))
-        candidate_endpoints.append((f"{adapter_base}/v1/agent/prompt", {
-            "prompt": prompt,
-            "sessionId": active_session_id,
-            "workspace": target_workspace,
-            "model": model_name or "deepseek-chat"
-        }, "DSH 3081 HTTP 适配器 (/v1/agent/prompt)"))
-        candidate_endpoints.append((f"{adapter_base}/api/session.prompt", {
-            "prompt": prompt,
-            "sessionId": active_session_id,
-            "workspace": target_workspace
-        }, "DSH 3081 HTTP 适配器 (/api/session.prompt)"))
+    # 构造规范的 sessionId（过滤占位符）
+    chat_completion_payload = {
+        "model": model_name or "deepseek-chat",
+        "messages": messages if messages else [{"role": "user", "content": prompt}],
+        "stream": False
+    }
+    if real_session_id:
+        chat_completion_payload["sessionId"] = real_session_id
+
+    prompt_payload = {
+        "prompt": prompt or (messages[-1].get("content", "") if messages else ""),
+        "workspace": target_workspace,
+        "model": model_name or "deepseek-chat"
+    }
+    if real_session_id:
+        prompt_payload["sessionId"] = real_session_id
+
+    candidate_endpoints.append((
+        f"{adapter_base}/v1/chat/completions",
+        chat_completion_payload,
+        "DSH 3081 HTTP 适配器 (/v1/chat/completions)"
+    ))
+    candidate_endpoints.append((
+        f"{adapter_base}/v1/agent/prompt",
+        prompt_payload,
+        "DSH 3081 HTTP 适配器 (/v1/agent/prompt)"
+    ))
+    candidate_endpoints.append((
+        f"{adapter_base}/api/session.prompt",
+        prompt_payload,
+        "DSH 3081 HTTP 适配器 (/api/session.prompt)"
+    ))
 
     # 2. 原生 WebSocket 通道
     if HAS_WEBSOCKETS and not harness_base.startswith("https://"):
@@ -1110,7 +1487,7 @@ async def execute_local_harness(
                 headers["Authorization"] = f"Bearer {auth_key}"
 
             req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=120) as response:
+            with GLOBAL_HTTP_CLIENT.direct_opener.open(req, timeout=600) as response:
                 return response.read().decode("utf-8")
 
         try:
@@ -1125,13 +1502,27 @@ async def execute_local_harness(
                         last_err = json.dumps(err_detail, ensure_ascii=False)
                         continue
 
-                    # 提取文本结果
-                    txt = extract_text_from_obj(resp_json)
-                    if txt and not is_html_content(txt):
-                        output_content = txt
+                    # 1. 优先提取 dsh-rest-adapter 或标准接口的 result 字段
+                    if "result" in resp_json and resp_json["result"]:
+                        res_val = resp_json["result"]
+                        if isinstance(res_val, str) and not is_html_content(res_val):
+                            output_content = res_val
+                        elif isinstance(res_val, dict) or isinstance(res_val, list):
+                            extracted = extract_text_from_obj(res_val)
+                            if extracted and not is_html_content(extracted):
+                                output_content = extracted
 
+                    # 2. 提取 choices 标准返回
                     if output_content is None and "choices" in resp_json and len(resp_json["choices"]) > 0:
-                        output_content = resp_json["choices"][0].get("message", {}).get("content", "")
+                        choice_msg = resp_json["choices"][0].get("message", {})
+                        if isinstance(choice_msg, dict) and choice_msg.get("content"):
+                            output_content = choice_msg.get("content", "")
+
+                    # 3. 通用递归提取
+                    if output_content is None:
+                        txt = extract_text_from_obj(resp_json)
+                        if txt and not is_html_content(txt):
+                            output_content = txt
                 else:
                     output_content = str(resp_json)
             except Exception:
@@ -1180,19 +1571,21 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
 
     try:
         init_workspaces, init_sessions = await query_dsh_workspaces_and_sessions(args.harness_url)
+        init_models = await query_dsh_models(args.harness_url)
         await loop.run_in_executor(
             None,
             lambda: http_post_json(register_url, {
                 "token": token,
                 "clientInfo": {
                     "name": "DeepSeek-Harness-Local",
-                    "version": "3.5.0",
+                    "version": "3.7.0",
                     "harnessUrl": args.harness_url,
                     "model": args.harness_model,
                     "platform": sys.platform,
                     "pid": os.getpid(),
                     "concurrency": concurrency_limit,
-                    "mode": "polling"
+                    "mode": "polling",
+                    "models": init_models
                 }
             })
         )
@@ -1202,12 +1595,13 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
                 lambda: http_post_json(f"{server_base}/api/agent/sync-sessions", {
                     "token": token,
                     "workspaces": init_workspaces,
-                    "sessions": init_sessions
+                    "sessions": init_sessions,
+                    "models": init_models
                 }, timeout=5)
             )
         except Exception:
             pass
-        print(f"\033[92m[✓ 注册成功] 已通过 HTTP 调度网关认证！发现 {len(init_sessions)} 个本地会话。Token: {token}\033[0m")
+        print(f"\033[92m[✓ 注册成功] 已通过 HTTP 调度网关认证！发现 {len(init_sessions)} 个本地会话，{len(init_models)} 个可用模型。Token: {token}\033[0m")
     except Exception as e:
         print(f"\033[93m[注册告警] 首次注册响应: {e}，将直接进入长轮询调度...\033[0m")
 
@@ -1252,21 +1646,38 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
             except Exception:
                 pass
 
+        async def on_approval(approval_data: dict):
+            try:
+                await loop.run_in_executor(
+                    None,
+                    lambda: http_post_json(f"{server_base}/api/agent/waiting-approval", {
+                        "taskId": task_id,
+                        "token": token,
+                        "approval": approval_data
+                    }, timeout=5)
+                )
+            except Exception:
+                pass
+
         extra_config = {
             "apiEndpoint": task_data.get("apiEndpoint") or getattr(args, "chat_api_url", ""),
             "apiKey": task_data.get("apiKey") or getattr(args, "chat_api_key", ""),
             "chatModel": task_data.get("chatModel") or getattr(args, "chat_model", ""),
+            "reasoningEffort": task_data.get("reasoningEffort") or task_data.get("reasoning_effort") or "",
+            "permission": task_data.get("permission") or "workspace-write",
         }
 
         try:
             async with semaphore:
                 success, output = await execute_local_harness(
-                    task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config, target_workspace=target_ws
+                    task_id, prompt, messages, harness_url, model_name, session_id, on_step, extra_config, target_workspace=target_ws, on_approval_callback=on_approval
                 )
         except Exception as task_err:
             success = False
             output = f"本地执行异常: {task_err}"
             await on_step(f"❌ 任务发生未捕获异常: {task_err}")
+        finally:
+            ACTIVE_SESSION_REGISTRY.pop(task_id, None)
 
         status_tag = "✓ 任务完成" if success else "✗ 任务异常"
         color = "\033[92m" if success else "\033[91m"
@@ -1289,12 +1700,14 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
 
         try:
             cur_ws, cur_sess = await query_dsh_workspaces_and_sessions(harness_url)
+            cur_mods = await query_dsh_models(harness_url)
             await loop.run_in_executor(
                 None,
                 lambda: http_post_json(f"{server_base}/api/agent/sync-sessions", {
                     "token": token,
                     "workspaces": cur_ws,
-                    "sessions": cur_sess
+                    "sessions": cur_sess,
+                    "models": cur_mods
                 }, timeout=5)
             )
         except Exception:
@@ -1311,6 +1724,27 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
                 t_id = resp.get("taskId", f"task_{int(time.time()*1000)}")
                 t_coro = asyncio.create_task(handle_task(resp))
                 running_tasks[t_id] = t_coro
+            elif mtype in ("cancel_task", "abort_task"):
+                c_task_id = resp.get("taskId")
+                reg_info = ACTIVE_SESSION_REGISTRY.get(c_task_id)
+                if reg_info:
+                    await abort_dsh_session(reg_info["harness_url"], reg_info["session_id"])
+                    print(f"\033[93m[一键中止] 已向本地 DSH 发起中止轮次请求: {reg_info['session_id']}\033[0m")
+            elif mtype == "agent_approve":
+                a_task_id = resp.get("taskId")
+                a_appr_id = resp.get("approvalId")
+                a_act = resp.get("action", "allow")
+                reg_info = ACTIVE_SESSION_REGISTRY.get(a_task_id)
+                if reg_info:
+                    await approve_dsh_session(reg_info["harness_url"], reg_info["session_id"], a_appr_id, a_act)
+                    print(f"\033[92m[审批裁决] 已提交审批 {a_appr_id} -> {a_act}\033[0m")
+            elif mtype == "rename_session":
+                s_id = resp.get("sessionId")
+                s_title = resp.get("title")
+                await rename_dsh_session(args.harness_url, s_id, s_title)
+            elif mtype == "archive_session":
+                s_id = resp.get("sessionId")
+                await archive_dsh_session(args.harness_url, s_id)
             elif mtype == "token_revoked":
                 print("\033[91m[权限注销] 当前配对 Token 已在 App 端被重置或注销。桥接程序已停止。\033[0m")
                 return
@@ -1320,8 +1754,16 @@ async def run_polling_bridge(args, token: str, server_base: str, concurrency_lim
 
 async def run_bridge_client(args):
     token = (args.token or "").strip()
-    if not token:
-        token = "default_agent_token"
+    if not token or token in ("default_agent_token", "YOUR_AGENT_TOKEN_HERE", "<YOUR_AGENT_TOKEN>"):
+        print("\033[91m" + "=" * 70)
+        print("❌ [连接失败] 未检测到有效的 App 配对密钥 (Token)！")
+        print("   原因：当前未配置 --token 参数，或使用了默认占位符。")
+        print("   排查方案：")
+        print("   1. 打开手机/网页端 App ➔ 进入【设置 ➔ 🤖 本地 Agent (Harness)】；")
+        print("   2. 查看您的【专属配对 Token】；")
+        print("   3. 重新运行命令，例如：python deepseek_bridge.py --token \"您的真实Token\"")
+        print("=" * 70 + "\033[0m")
+        sys.exit(1)
 
     server_base = normalize_server_url(args.server)
     concurrency_limit = max(1, args.concurrency)
@@ -1329,11 +1771,11 @@ async def run_bridge_client(args):
 
     proxy_mode_desc = "强制 Direct 直连" if args.no_proxy else (f"自定义代理 ({args.proxy})" if args.proxy else "自适应系统/VPN代理")
     print("=" * 70)
-    print("\033[92m DeepSeek Harness 本地安全反向桥接启动成功！ (v3.5 高可用双模版)\033[0m")
+    print("\033[96m 正在启动 DeepSeek Harness 本地反向桥接客户端 (v3.6 安全版)...\033[0m")
     print(f" • 配对 Token     : \033[96m{token}\033[0m")
     print(f" • App 调度服务器 : \033[94m{server_base}\033[0m")
     print(f" • 网络连接模式   : \033[95m{proxy_mode_desc}\033[0m")
-    print(f" • 本地 Harness   : \033[93m{args.harness_url}\033[0m (默认 3081/v1)")
+    print(f" • 本地 Harness   : \033[93m{args.harness_url}\033[0m (默认 3080/v1)")
     print(f" • 本地模型       : {args.harness_model}")
     print(f" • 最大并发任务   : {concurrency_limit}")
     print(f" • Python 运行环境: {sys.version.split()[0]} ({sys.platform})")
@@ -1376,13 +1818,15 @@ async def run_bridge_client(args):
 
                 try:
                     init_ws, init_sess = await query_dsh_workspaces_and_sessions(args.harness_url)
+                    init_mods = await query_dsh_models(args.harness_url)
                     await ws.send(json.dumps({
                         "type": "sync_sessions",
                         "token": token,
                         "workspaces": init_ws,
-                        "sessions": init_sess
+                        "sessions": init_sess,
+                        "models": init_mods
                     }))
-                    print(f"\033[92m[✓ 会话同步] 已向 App 同步本地 {len(init_sess)} 个 DSH 会话\033[0m")
+                    print(f"\033[92m[✓ 会话同步] 已向 App 同步本地 {len(init_sess)} 个 DSH 会话，{len(init_mods)} 个可用模型\033[0m")
                 except Exception:
                     pass
 
@@ -1399,18 +1843,81 @@ async def run_bridge_client(args):
                             }))
                             continue
 
+                        if mtype == "auth_error":
+                            print(f"\033[91m[❌ 授权失败] 调度中心拒绝配对: {msg.get('message', '未配置或无效的密钥')}\033[0m")
+                            return
+
                         if mtype == "token_revoked":
                             print("\033[91m[权限注销] 当前配对 Token 已在 App 端被重置或注销。桥接程序已停止。\033[0m")
                             return
 
+                        if mtype == "get_models":
+                            target_h_url = msg.get("harnessUrl", args.harness_url)
+                            cur_mods = await query_dsh_models(target_h_url)
+                            await ws.send(json.dumps({
+                                "type": "models_result",
+                                "token": token,
+                                "models": cur_mods
+                            }))
+                            continue
+
                         if mtype == "get_sessions":
                             target_h_url = msg.get("harnessUrl", args.harness_url)
                             cur_workspaces, cur_sessions = await query_dsh_workspaces_and_sessions(target_h_url)
+                            cur_mods = await query_dsh_models(target_h_url)
                             await ws.send(json.dumps({
                                 "type": "sessions_result",
                                 "token": token,
                                 "workspaces": cur_workspaces,
-                                "sessions": cur_sessions
+                                "sessions": cur_sessions,
+                                "models": cur_mods
+                            }))
+                            continue
+
+                        if mtype in ("cancel_task", "abort_task"):
+                            c_task_id = msg.get("taskId")
+                            reg_info = ACTIVE_SESSION_REGISTRY.get(c_task_id)
+                            if reg_info:
+                                await abort_dsh_session(reg_info["harness_url"], reg_info["session_id"])
+                                print(f"\033[93m[一键中止] 已向本地 DSH 发起中止轮次请求: {reg_info['session_id']}\033[0m")
+                            continue
+
+                        if mtype == "agent_approve":
+                            a_task_id = msg.get("taskId")
+                            a_appr_id = msg.get("approvalId")
+                            a_act = msg.get("action", "allow")
+                            reg_info = ACTIVE_SESSION_REGISTRY.get(a_task_id)
+                            if reg_info:
+                                await approve_dsh_session(reg_info["harness_url"], reg_info["session_id"], a_appr_id, a_act)
+                                print(f"\033[92m[审批裁决] 已提交审批 {a_appr_id} -> {a_act}\033[0m")
+                            continue
+
+                        if mtype == "rename_session":
+                            s_id = msg.get("sessionId")
+                            s_title = msg.get("title")
+                            target_h_url = msg.get("harnessUrl", args.harness_url)
+                            ok_rename, ren_resp = await rename_dsh_session(target_h_url, s_id, s_title)
+                            cur_ws, cur_sess = await query_dsh_workspaces_and_sessions(target_h_url)
+                            await ws.send(json.dumps({
+                                "type": "rename_session_result",
+                                "sessionId": s_id,
+                                "success": ok_rename,
+                                "workspaces": cur_ws,
+                                "sessions": cur_sess
+                            }))
+                            continue
+
+                        if mtype == "archive_session":
+                            s_id = msg.get("sessionId")
+                            target_h_url = msg.get("harnessUrl", args.harness_url)
+                            ok_arch, arch_resp = await archive_dsh_session(target_h_url, s_id)
+                            cur_ws, cur_sess = await query_dsh_workspaces_and_sessions(target_h_url)
+                            await ws.send(json.dumps({
+                                "type": "archive_session_result",
+                                "sessionId": s_id,
+                                "success": ok_arch,
+                                "workspaces": cur_ws,
+                                "sessions": cur_sess
                             }))
                             continue
 
@@ -1463,20 +1970,35 @@ async def run_bridge_client(args):
                                 except Exception:
                                     pass
 
+                            async def ws_approval_cb(approval_data: dict):
+                                try:
+                                    await ws.send(json.dumps({
+                                        "type": "waiting_approval",
+                                        "taskId": task_id,
+                                        "approval": approval_data,
+                                        "timestamp": int(time.time() * 1000)
+                                    }))
+                                except Exception:
+                                    pass
+
                             extra_config = {
                                 "apiEndpoint": msg.get("apiEndpoint") or getattr(args, "chat_api_url", ""),
                                 "apiKey": msg.get("apiKey") or getattr(args, "chat_api_key", ""),
                                 "chatModel": msg.get("chatModel") or getattr(args, "chat_model", ""),
+                                "reasoningEffort": msg.get("reasoningEffort") or msg.get("reasoning_effort") or "",
+                                "permission": msg.get("permission") or "workspace-write",
                             }
 
                             try:
                                 success, output = await execute_local_harness(
-                                    task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config, target_workspace=target_ws
+                                    task_id, prompt, messages, harness_url, model_name, session_id, ws_step_cb, extra_config, target_workspace=target_ws, on_approval_callback=ws_approval_cb
                                 )
                             except Exception as task_err:
                                 success = False
                                 output = f"本地执行异常: {task_err}"
                                 await ws_step_cb(f"❌ 任务发生未捕获异常: {task_err}")
+                            finally:
+                                ACTIVE_SESSION_REGISTRY.pop(task_id, None)
 
                             status_tag = "✓ 任务完成" if success else "✗ 任务异常"
                             color = "\033[92m" if success else "\033[91m"

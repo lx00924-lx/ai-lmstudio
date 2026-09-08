@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 class BridgeScriptHelper {
@@ -11,8 +10,8 @@ class BridgeScriptHelper {
     required String serverUrl,
     required String harnessUrl,
   }) {
-    final cleanServer = serverUrl.isNotEmpty ? serverUrl : 'https://lx00924ai.top';
-    final cleanHarness = harnessUrl.isNotEmpty ? harnessUrl : 'http://127.0.0.1:3081';
+    final cleanServer = serverUrl.isNotEmpty ? serverUrl : 'https://www.lx00924ai.top';
+    final cleanHarness = harnessUrl.isNotEmpty ? harnessUrl : 'http://127.0.0.1:3080';
     final cleanToken = token.isNotEmpty ? token : 'agent_default';
 
     return '''@echo off
@@ -55,8 +54,8 @@ if %errorlevel% neq 0 (
 
   /// 获取标准 Python 桥接守护脚本 (deepseek_bridge.py)
   static String generatePyContent({
-    String serverUrl = 'https://lx00924ai.top',
-    String defaultHarnessUrl = 'http://127.0.0.1:3081',
+    String serverUrl = 'https://www.lx00924ai.top',
+    String defaultHarnessUrl = 'http://127.0.0.1:3080',
   }) {
     return '''#!/usr/bin/env python3
 """

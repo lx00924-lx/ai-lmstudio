@@ -226,6 +226,53 @@ class MessageBubble extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // 图片附件展示
+                      if (message.attachments != null && message.attachments!.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8.0),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: message.attachments!.map((att) {
+                              final imgBytes = ImagePickerHelper.decodeBase64Image(att);
+                              if (imgBytes == null) return const SizedBox.shrink();
+                              return GestureDetector(
+                                onTap: () {
+                                  showDialog(
+                                    context: context,
+                                    builder: (ctx) => Dialog(
+                                      backgroundColor: Colors.transparent,
+                                      insetPadding: const EdgeInsets.all(12),
+                                      child: Stack(
+                                        alignment: Alignment.topRight,
+                                        children: [
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(16),
+                                            child: Image.memory(imgBytes, fit: BoxFit.contain),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                                            onPressed: () => Navigator.pop(ctx),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.memory(
+                                    imgBytes,
+                                    width: 140,
+                                    height: 140,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+
                       // 思考链展示
                       if (message.reasoningContent != null &&
                           message.reasoningContent!.isNotEmpty)
@@ -237,14 +284,17 @@ class MessageBubble extends StatelessWidget {
 
                       // 正文渲染 (使用 SelectionArea 配合 selectable: false 彻底修复多段跨行选中问题)
                       if (isUser)
-                        Text(
-                          message.content,
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: settings.chatFontSize.toDouble(),
-                            height: 1.4,
-                          ),
-                        )
+                        if (message.content.isNotEmpty)
+                          Text(
+                            message.content,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: settings.chatFontSize.toDouble(),
+                              height: 1.4,
+                            ),
+                          )
+                        else
+                          const SizedBox.shrink()
                       else
                         MarkdownBody(
                           data: message.content.isEmpty && message.isStreaming ? '正在思考中...' : message.content,

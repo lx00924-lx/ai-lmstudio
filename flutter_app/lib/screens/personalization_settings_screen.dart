@@ -18,6 +18,12 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
   late TextEditingController _systemPromptCtrl;
   late TextEditingController _opacityCtrl;
 
+  final FocusNode _splashTitleFocus = FocusNode();
+  final FocusNode _splashSubtitleFocus = FocusNode();
+  final FocusNode _splashDurationFocus = FocusNode();
+  final FocusNode _systemPromptFocus = FocusNode();
+  final FocusNode _opacityFocus = FocusNode();
+
   @override
   void initState() {
     super.initState();
@@ -28,46 +34,46 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
     _systemPromptCtrl = TextEditingController(text: s.systemPrompt);
     _opacityCtrl = TextEditingController(text: s.backgroundOpacity.toString());
 
-    // 绑定实时自动保存监听，用户输入任意文字即刻落盘
-    _splashTitleCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      sp.settings.splashTitle = _splashTitleCtrl.text.trim();
-      sp.updateSettings(sp.settings);
+    // 失焦时自动保存，消除每次按键的卡顿与重绘
+    _splashTitleFocus.addListener(() {
+      if (!_splashTitleFocus.hasFocus) _savePersonalization();
     });
+    _splashSubtitleFocus.addListener(() {
+      if (!_splashSubtitleFocus.hasFocus) _savePersonalization();
+    });
+    _splashDurationFocus.addListener(() {
+      if (!_splashDurationFocus.hasFocus) _savePersonalization();
+    });
+    _systemPromptFocus.addListener(() {
+      if (!_systemPromptFocus.hasFocus) _savePersonalization();
+    });
+    _opacityFocus.addListener(() {
+      if (!_opacityFocus.hasFocus) _savePersonalization();
+    });
+  }
 
-    _splashSubtitleCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      sp.settings.splashSubtitle = _splashSubtitleCtrl.text.trim();
-      sp.updateSettings(sp.settings);
-    });
-
-    _splashDurationCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      final val = int.tryParse(_splashDurationCtrl.text.trim());
-      if (val != null) {
-        sp.settings.splashDurationMs = val;
-        sp.updateSettings(sp.settings);
-      }
-    });
-
-    _systemPromptCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      sp.settings.systemPrompt = _systemPromptCtrl.text.trim();
-      sp.updateSettings(sp.settings);
-    });
-
-    _opacityCtrl.addListener(() {
-      final sp = context.read<SettingsProvider>();
-      final val = int.tryParse(_opacityCtrl.text.trim());
-      if (val != null && val >= 0 && val <= 100) {
-        sp.settings.backgroundOpacity = val;
-        sp.updateSettings(sp.settings);
-      }
-    });
+  void _savePersonalization() {
+    if (!mounted) return;
+    final sp = context.read<SettingsProvider>();
+    final s = sp.settings;
+    s.splashTitle = _splashTitleCtrl.text.trim();
+    s.splashSubtitle = _splashSubtitleCtrl.text.trim();
+    final dur = int.tryParse(_splashDurationCtrl.text.trim());
+    if (dur != null) s.splashDurationMs = dur;
+    s.systemPrompt = _systemPromptCtrl.text.trim();
+    final op = int.tryParse(_opacityCtrl.text.trim());
+    if (op != null && op >= 0 && op <= 100) s.backgroundOpacity = op;
+    sp.updateSettings(s);
   }
 
   @override
   void dispose() {
+    _savePersonalization();
+    _splashTitleFocus.dispose();
+    _splashSubtitleFocus.dispose();
+    _splashDurationFocus.dispose();
+    _systemPromptFocus.dispose();
+    _opacityFocus.dispose();
     _splashTitleCtrl.dispose();
     _splashSubtitleCtrl.dispose();
     _splashDurationCtrl.dispose();
@@ -85,8 +91,24 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
     return Scaffold(
       appBar: AppBar(
         title: const Text('个性化设置'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.check),
+            tooltip: '保存',
+            onPressed: () {
+              FocusScope.of(context).unfocus();
+              _savePersonalization();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('个性化设置已保存')),
+              );
+            },
+          ),
+        ],
       ),
-      body: ListView(
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         children: [
           // 界面显示与壁纸
@@ -193,6 +215,7 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                   const SizedBox(height: 16),
                   TextField(
                     controller: _opacityCtrl,
+                    focusNode: _opacityFocus,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
                       labelText: '背景不透明度 (0-100%)',
@@ -232,6 +255,7 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                   ),
                   TextField(
                     controller: _splashTitleCtrl,
+                    focusNode: _splashTitleFocus,
                     decoration: const InputDecoration(
                       labelText: '启动主标题',
                       hintText: 'Aether-X',
@@ -242,6 +266,7 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                   const SizedBox(height: 12),
                   TextField(
                     controller: _splashSubtitleCtrl,
+                    focusNode: _splashSubtitleFocus,
                     decoration: const InputDecoration(
                       labelText: '启动子文本',
                       hintText: 'Loading AI Experience',
@@ -252,6 +277,7 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                   const SizedBox(height: 12),
                   TextField(
                     controller: _splashDurationCtrl,
+                    focusNode: _splashDurationFocus,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
                       labelText: '持续时间 (ms)',
@@ -338,6 +364,7 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
                   const SizedBox(height: 12),
                   TextField(
                     controller: _systemPromptCtrl,
+                    focusNode: _systemPromptFocus,
                     minLines: 3,
                     maxLines: null, // 自适应文字长度，不再局限于固定狭小滑动区域
                     keyboardType: TextInputType.multiline,
@@ -355,6 +382,7 @@ class _PersonalizationSettingsScreenState extends State<PersonalizationSettingsS
           ),
           const SizedBox(height: 24),
         ],
+      ),
       ),
     );
   }

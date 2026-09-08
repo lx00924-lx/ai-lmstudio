@@ -211,42 +211,48 @@ class _ChatInputBarState extends State<ChatInputBar> with SingleTickerProviderSt
           ),
           // 图片待发送缩略图预览
           if (_selectedImageBase64 != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Stack(
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF0284C7), width: 1.5),
-                        image: DecorationImage(
-                          image: MemoryImage(base64Decode(_selectedImageBase64!)),
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: -2,
-                      right: -2,
-                      child: GestureDetector(
-                        onTap: () => setState(() => _selectedImageBase64 = null),
-                        child: Container(
-                          decoration: const BoxDecoration(
-                            color: Colors.black87,
-                            shape: BoxShape.circle,
+            Builder(
+              builder: (context) {
+                final previewBytes = ImagePickerHelper.decodeBase64Image(_selectedImageBase64);
+                if (previewBytes == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Stack(
+                      children: [
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF0284C7), width: 1.5),
+                            image: DecorationImage(
+                              image: MemoryImage(previewBytes),
+                              fit: BoxFit.cover,
+                            ),
                           ),
-                          padding: const EdgeInsets.all(2),
-                          child: const Icon(Icons.close, color: Colors.white, size: 14),
                         ),
-                      ),
+                        Positioned(
+                          top: -2,
+                          right: -2,
+                          child: GestureDetector(
+                            onTap: () => setState(() => _selectedImageBase64 = null),
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                color: Colors.black87,
+                                shape: BoxShape.circle,
+                              ),
+                              padding: const EdgeInsets.all(2),
+                              child: const Icon(Icons.close, color: Colors.white, size: 14),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             ),
 
           // 展开的 + 号工具栏面板

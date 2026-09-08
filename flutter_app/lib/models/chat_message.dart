@@ -2,6 +2,36 @@ import 'dart:convert';
 
 enum MessageRole { user, assistant, system }
 
+class AgentExecutionRecord {
+  final String status;
+  final List<String> steps;
+  final String? rawOutput;
+  final String? timestamp;
+
+  AgentExecutionRecord({
+    required this.status,
+    required this.steps,
+    this.rawOutput,
+    this.timestamp,
+  });
+
+  Map<String, dynamic> toMap() => {
+    'status': status,
+    'steps': steps,
+    'rawOutput': rawOutput,
+    'timestamp': timestamp,
+  };
+
+  factory AgentExecutionRecord.fromMap(Map<dynamic, dynamic> map) {
+    return AgentExecutionRecord(
+      status: map['status']?.toString() ?? 'completed',
+      steps: (map['steps'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [],
+      rawOutput: map['rawOutput']?.toString(),
+      timestamp: map['timestamp']?.toString(),
+    );
+  }
+}
+
 class ChatMessage {
   final String id;
   final String sessionId;
@@ -13,6 +43,8 @@ class ChatMessage {
   int? elapsedSeconds;
   List<String>? attachments;
   String status; // 'completed' | 'error' | 'sending'
+  bool isAgentMode;
+  AgentExecutionRecord? agentExecution;
 
   ChatMessage({
     required this.id,
@@ -25,6 +57,8 @@ class ChatMessage {
     this.elapsedSeconds,
     this.attachments,
     this.status = 'completed',
+    this.isAgentMode = false,
+    this.agentExecution,
   }) : createdAt = createdAt ?? DateTime.now();
 
   Map<String, dynamic> toMap() {
@@ -42,6 +76,8 @@ class ChatMessage {
       'elapsedSeconds': elapsedSeconds,
       'attachments': attachments,
       'status': status,
+      'isAgentMode': isAgentMode,
+      'agentExecution': agentExecution?.toMap(),
     };
   }
 
@@ -64,6 +100,11 @@ class ChatMessage {
     }
     final sessId = (map['sessionId'] ?? 'default_session').toString();
 
+    AgentExecutionRecord? agentExec;
+    if (map['agentExecution'] is Map) {
+      agentExec = AgentExecutionRecord.fromMap(map['agentExecution'] as Map<dynamic, dynamic>);
+    }
+
     return ChatMessage(
       id: map['id']?.toString() ?? '',
       sessionId: sessId,
@@ -74,6 +115,8 @@ class ChatMessage {
       elapsedSeconds: map['elapsedSeconds'] as int?,
       attachments: (map['attachments'] as List<dynamic>?)?.map((e) => e.toString()).toList(),
       status: map['status']?.toString() ?? 'completed',
+      isAgentMode: map['isAgentMode'] == true,
+      agentExecution: agentExec,
     );
   }
 
